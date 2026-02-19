@@ -16,7 +16,7 @@ config = {'transformer': {'encoder_layer': 4, 'encoder_head': 2, 'encoder_hidden
         'variance_embedding': {'pitch_quantization': 'linear', 'energy_quantization': 'linear', 'n_bins': 256}, 
         'multi_speaker': False, 'max_seq_len': 1000}
 
-preprocess_config = {'dataset': 'LJSpeech', 'path': {'corpus_path': '/home/S3G-LABS/u1004/Documents/dataset/LJSpeech-1.1', 'lexicon_path': 'lexicon/librispeech-lexicon.txt', 'raw_path': '/home/S3G-LABS/u1004/Documents/audio/git_task/FastSpeech2/raw_data/LJSpeech', 'preprocessed_path': '/home/S3G-LABS/u1004/Documents/audio/git_task/FastSpeech2/preprocessed_data/LJSpeech'}, 
+preprocess_config = {'dataset': 'LJSpeech', 'path': {'corpus_path': '', 'lexicon_path': 'lexicon/librispeech-lexicon.txt', 'raw_path': '', 'preprocessed_path': 'dataset/LJSpeech'}, 
                     'preprocessing': {'val_size': 512, 'text': {'text_cleaners': ['english_cleaners'], 'language': 'en'}, 'audio': {'sampling_rate': 22050, 'max_wav_value': 32768.0}, 'stft': {'filter_length': 1024, 'hop_length': 256, 'win_length': 1024}, 'mel': {'n_mel_channels': 80, 'mel_fmin': 0, 'mel_fmax': 8000}, 'pitch': {'feature': 'phoneme_level', 'normalization': True}, 'energy': {'feature': 'phoneme_level', 'normalization': True}}}
 
 PAD = 0

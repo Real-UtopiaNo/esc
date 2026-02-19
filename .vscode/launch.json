@@ -12,7 +12,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": true,
-            "args": ["--model", "mpnet", "--ptq", "hyq", "--num_calib_data", "5", "--num_bits", "8", "--calib", "mse"]
+            "args": ["--model", "fastspeech2", "--ptq", "hyq", "--num_calib_data", "5", "--num_bits", "8", "--calib", "mse"]
         }
     ]
 }

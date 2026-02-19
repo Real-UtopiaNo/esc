@@ -616,7 +616,7 @@ class FastSpeech2_Dataset(Dataset):
         self, filename='val.txt', sort=False, drop_last=False
     ):
         self.dataset_name = 'LJSpeech'
-        self.preprocessed_path = '/home/S3G-LABS/u1004/Documents/audio/git_task/FastSpeech2/preprocessed_data/LJSpeech'
+        self.preprocessed_path = 'dataset/LJSpeech'
         self.cleaners = ['english_cleaners']
         self.batch_size = 16
 

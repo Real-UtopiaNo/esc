@@ -19,7 +19,7 @@ import numpy as np
 
 logger = logging.getLogger("my_app")
 
-ckpt_path= "/home/S3G-LABS/u1004/Documents/audio/git_task/FastSpeech2/output/ckpt/LJSpeech/900000.pth.tar"
+ckpt_path= "checkpoints/fastspeech2.pth.tar"
 
 compile_spec_encoder = {
     "inputs": [
@@ -43,8 +43,6 @@ compile_spec_decoder = {
     "ir": "torchscript"
 }
 
-
-
 nwarmup=50
 nruns=1000
 
@@ -61,7 +59,6 @@ class FastSpeech2Model(BaseModel):
     def evaluate(self):
         self.model.eval()
         self.model.requires_grad_ = False
-        step = 900000
         loss_sums = [0 for _ in range(6)]
         for batchs in self.val_loader:
             for batch in batchs:
@@ -78,13 +75,12 @@ class FastSpeech2Model(BaseModel):
 
         loss_means = [loss_sum / self.len_dataset for loss_sum in loss_sums]
 
-        message = "Validation Step {}, Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Pitch Loss: {:.4f}, Energy Loss: {:.4f}, Duration Loss: {:.4f}".format(
-            *([step] + [l for l in loss_means])
+        message = "Total Loss: {:.4f}, Mel Loss: {:.4f}, Mel PostNet Loss: {:.4f}, Pitch Loss: {:.4f}, Energy Loss: {:.4f}, Duration Loss: {:.4f}".format(
+            *([l for l in loss_means])
         )
-        print(message)
         logger.info(message)
     
-    def train_calib(self):
+    def objective_function(self):
         self.model.eval()
         self.model.requires_grad_ = False
         loss_sums = [0 for _ in range(6)]
@@ -112,7 +108,7 @@ class FastSpeech2Model(BaseModel):
         loss_means = [loss_sum / self.len_dataset for loss_sum in loss_sums]
         loss = loss_means[2]
 
-        return loss, 0
+        return loss
     
     def load(self):
         ckpt = torch.load(ckpt_path, weights_only=False)

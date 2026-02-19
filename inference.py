@@ -165,6 +165,8 @@ if __name__ == "__main__":
     model_ptq.evaluate()
     #print(model_ptq.model)
 
+    assert False
+
     #Evaluation INT8 without calibration
     quant_modules.initialize()
     model_ptq = init_model(model_name)
