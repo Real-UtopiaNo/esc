@@ -1,0 +1,16 @@
+torch==2.7.0
+torchaudio==2.7.0
+torchvision==0.22.0
+numpy
+librosa
+timm==0.4.5
+torch_tensorrt==2.7.0
+tqdm
+absl-py
+pyyaml
+rich
+pesq
+https://github.com/schmiph2/pysepm/archive/master.zip
+inflect
+Unidecode
+jiwer

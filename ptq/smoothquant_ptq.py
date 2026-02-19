@@ -5,8 +5,8 @@ from torch import optim
 import torch.nn.functional as F
 from .base_ptq import PTQBase
 
-from models_ptq.mpsenet.model import FeedForwardModule, AttentionModule, ConformerConvModule
-from models_ptq.conformer.model import FeedForwardBlock
+from models.mpsenet.model import FeedForwardModule, AttentionModule, ConformerConvModule
+from models.conformer.model import FeedForwardBlock
 from timm.models.vision_transformer import Block
 
 @torch.no_grad()

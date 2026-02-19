@@ -162,7 +162,7 @@ if __name__ == "__main__":
     #Evaluation FP32
     model_ptq = init_model(model_name)
     model_ptq.load()
-    #model_ptq.evaluate()
+    model_ptq.evaluate()
     #print(model_ptq.model)
 
     #Evaluation INT8 without calibration
