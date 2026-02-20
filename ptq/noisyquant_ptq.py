@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 from .base_ptq import PTQBase
-from utils import collect_layer_inputs
 
 class NoisyQuantPTQ(PTQBase):
     def __init__(self, model, layers_input=None, search_space_mean=200, search_space_range=1000, device = "cuda"):

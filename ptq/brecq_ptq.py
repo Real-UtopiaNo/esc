@@ -4,17 +4,15 @@ import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
 from .base_ptq import PTQBase
-from utils import collect_layer_inputs
 from collections import defaultdict
-
 
 class BRECQPTQ(PTQBase):
     def __init__(self, model, layers_input=None, max_iter=2, lr=0.01, p=2.4, device = "cuda"):
         self.model = model
         self.layers_input = layers_input
-        self.max_iter = max_iter #test 10, 50, 100, 200
-        self.lr = lr #test 1e-2, 1e-3, 1e-4
-        self.p = p #defined not change
+        self.max_iter = max_iter
+        self.lr = lr
+        self.p = p
         self.device = device
     
     def run(self):
@@ -52,8 +50,7 @@ class BRECQPTQ(PTQBase):
                             x = self.layers_input[name][i]
                             x = x.to(self.device)
                             y_quant = module(x)
-                            #y_quant.requires_grad_(True)
-                            #y_quant.retain_grad()
+
                             y_ref = layers_output[name][i]
                             y_ref = y_ref.to(self.device)
                             

@@ -3,14 +3,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .base_ptq import PTQBase
-from utils import collect_layer_inputs
 
 class AdaroundPTQ(PTQBase):
     def __init__(self, model, layers_input=None, max_iter=2, reg_lambda = 0.01, device = "cuda"):
         self.model = model
         self.layers_input = layers_input
-        self.max_iter = max_iter #1000 since we have 10 input for each
-        self.reg_lambda = reg_lambda #seems ok
+        self.max_iter = max_iter 
+        self.reg_lambda = reg_lambda
         self.device = device
     
     def run(self):
@@ -47,7 +46,5 @@ class AdaroundPTQ(PTQBase):
                         optimizer.step()
                         total_loss += loss.item()
 
-                    # if (it + 1) % 100 == 0:
-                    #     print(f"[Iter {it+1}] Loss: {total_loss / len(layers_input[name]):.6f}")
                 module._weight_quantizer.disable_calib_ptq()
         return self.model

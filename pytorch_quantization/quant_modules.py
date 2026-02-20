@@ -32,7 +32,7 @@ _DEFAULT_QUANT_MAP = [_quant_entry(torch.nn, "Conv1d", quant_nn.QuantConv1d),
                       #_quant_entry(torch.nn, "ConvTranspose2d", quant_nn.QuantConvTranspose2d),
                       _quant_entry(torch.nn, "ConvTranspose3d", quant_nn.QuantConvTranspose3d),
                       _quant_entry(torch.nn, "Linear", quant_nn.QuantLinear),
-                      _quant_entry(torch.nn, "LSTM", quant_nn.QuantLSTM), #comment for Conformer
+                      #_quant_entry(torch.nn, "LSTM", quant_nn.QuantLSTM), #comment for Conformer
                       #_quant_entry(torch.nn, "LSTMCell", quant_nn.QuantLSTMCell),
                       _quant_entry(torch.nn, "AvgPool1d", quant_nn.QuantAvgPool1d),
                       _quant_entry(torch.nn, "AvgPool2d", quant_nn.QuantAvgPool2d),

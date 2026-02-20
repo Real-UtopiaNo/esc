@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .base_ptq import PTQBase
-from utils import collect_layer_inputs
 
 class BCPTQ(PTQBase):
     def __init__(self, model, layers_input=None, device = "cuda"):

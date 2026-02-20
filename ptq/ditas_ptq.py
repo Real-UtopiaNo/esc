@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 from .base_ptq import PTQBase
-from utils import collect_layer_inputs
 
 def mean_flat(tensor):
     """
@@ -34,13 +33,12 @@ class DiTASPTQ(PTQBase):
     def __init__(self, model, layers_input=None, iter_rank = 10, reduced_rank = 32, grid = 21, device = "cuda"):
         self.model = model
         self.layers_input = layers_input
-        self.iter_rank = iter_rank #between 5, 10, 20, 30
+        self.iter_rank = iter_rank
         self.reduced_rank = reduced_rank
         self.grid = grid
         self.device = device
     
     def run(self):
-        #allow_name = ['proj', 'qkv', 'fc1', 'fc2', 'ffm', 'slf_attn', 'linear_layer', 'mel_linear', 'linear_proj', 'ff1', 'attention', 'ff2','linear']
         allow_name = ['proj', 'qkv', 'fc1', 'fc2', 'ffm', 'linear_layer', 'linear_proj', 'fc6', 'linear', 'mlp_head']
         forbid_name = ['mel_linear', 'module.v.blocks']
 
@@ -77,8 +75,7 @@ class DiTASPTQ(PTQBase):
                 best_alpha = None
                 best_loss = float("inf")
                 loss_total = None
-                for grid in range(self.grid): #21 if not
-                    #print(best_loss)
+                for grid in range(self.grid):
                     loss_total = 0
                     alpha = 0.05 * grid
                     weight_scale = module.quant_weight.abs().max(dim=0)[0].clamp(min=1e-4)
@@ -106,14 +103,9 @@ class DiTASPTQ(PTQBase):
                             loss = mean_flat((HX_quant - HX_original) ** 2).mean().requires_grad_()
                             loss_total = loss_total + loss.item()
                     
-                    #print(loss_total)
-                    #print(f'Best Loss: {best_loss}')
                     if loss_total < best_loss:
                         best_loss = loss_total
                         best_alpha = alpha
-                
-                # if(best_loss > 0.5):
-                #     print(name)
                     
                 scales = (
                             ((module._input_quantizer._get_scale()).pow(best_alpha)/ weight_scale.pow(1 - best_alpha))

@@ -4,7 +4,6 @@ import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
 from .base_ptq import PTQBase
-from utils import collect_layer_inputs
 import logging
 
 logger = logging.getLogger("my_app")
@@ -13,9 +12,9 @@ class HyQPTQ(PTQBase):
     def __init__(self, model, layers_input=None, max_iter=2, lr = 0.01, int_softmax = False, device = "cuda"):
         self.model = model
         self.layers_input = layers_input
-        self.max_iter = max_iter #1000 but need to vary it a little
-        self.lr = lr #ok will not touch
-        self.int_softmax = int_softmax #for model using softmax
+        self.max_iter = max_iter
+        self.lr = lr
+        self.int_softmax = int_softmax
         self.device = device
     
     def run(self):
@@ -108,7 +107,6 @@ class HyQPTQ(PTQBase):
                         optimizer.zero_grad()
                         scheduler.step()
                 
-                #print(best_alpha)
                 if module.groups == 1:
                     module._weight_quantizer.init_ptq("hyq", alpha=best_alpha)
                 else:
@@ -118,16 +116,5 @@ class HyQPTQ(PTQBase):
                         module._weight_quantizer.init_ptq("hyq", alpha=best_alpha.reshape(-1, 1, 1, 1))
 
                 module._input_quantizer.init_ptq("hyq", alpha=(1 / best_alpha))
-
-                # sanity check
-                # module._weight_quantizer.disable()
-                # module._input_quantizer.disable()
-                # y_ref = module(x)
-                # module._weight_quantizer.enable()
-                # module._input_quantizer.enable()
-
-                # y_quantize = module(x)
-                # loss = criterion(y_ref, y_quantize)
-                # print(loss)
 
         return self.model

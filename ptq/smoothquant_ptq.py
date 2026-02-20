@@ -42,7 +42,7 @@ def smooth_ln_fcs(ln, fcs, act_scales, alpha=0.5):
         .to(dtype)
     )
 
-    ln.weight.mul_(scales) ##seems incoherent but ok perform better, incoherent with original implementation
+    ln.weight.mul_(scales)
     ln.bias.mul_(scales)
 
     for fc in fcs:

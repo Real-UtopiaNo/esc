@@ -74,11 +74,6 @@ class RepQViTPTQ(PTQBase):
                             next_module.weight.data = next_module.weight.data * r
                     else:
                         next_module.weight.data = next_module.weight.data * r
-                    '''if next_module.bias is not None:
-                        next_module.bias.data = next_module.bias.data + torch.mm(next_module.weight.data, b.reshape(-1,1)).reshape(-1)
-                    else:
-                        next_module.bias = Parameter(torch.Tensor(next_module.out_features))
-                        next_module.bias.data = torch.mm(next_module.weight.data, b.reshape(-1,1)).reshape(-1)'''
                     
                     max_bound = torch.tensor((2.0**(next_module._input_quantizer._num_bits - 1 + int(next_module._input_quantizer._unsigned))) - 1.0, device=target_delta.device)
                     amax = max_bound / target_delta

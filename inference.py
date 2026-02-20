@@ -162,10 +162,8 @@ if __name__ == "__main__":
     #Evaluation FP32
     model_ptq = init_model(model_name)
     model_ptq.load()
-    model_ptq.evaluate()
+    #model_ptq.evaluate()
     #print(model_ptq.model)
-
-    assert False
 
     #Evaluation INT8 without calibration
     quant_modules.initialize()
@@ -192,7 +190,7 @@ if __name__ == "__main__":
             num_calib_batch=100, #100
             method="max",
             percentile=args.percentile)
-        
+
         with open(args.precompute_scale, "rb") as f:
             dict_amax = pickle.load(f)
         
@@ -222,7 +220,9 @@ if __name__ == "__main__":
                     list_amax.append(dict_amax[name].item())
     
     # logger.info('Evaluation before PTQ')
-    #model_ptq.evaluate()
+    model_ptq.evaluate()
+
+    assert False
 
 
     if ptq == "adaround":

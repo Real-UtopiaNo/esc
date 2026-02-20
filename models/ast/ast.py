@@ -212,6 +212,7 @@ class ASTModel(BaseModel):
                 for i, (audio_input, labels) in enumerate(self.train_loader):
                     audio_input = audio_input.to(self.device).float()
                     jit_model = torch.jit.trace(model_to_trace, audio_input)
+                    #if it fails, please comment @autocast in forward definition of AST model
                     torch.jit.save(jit_model, jit_path)
                     if i  > 0:
                         break
