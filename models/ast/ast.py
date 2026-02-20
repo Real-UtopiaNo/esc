@@ -18,10 +18,10 @@ import os
 
 logger = logging.getLogger("my_app")
 
-ckpt_path = '/home/S3G-LABS/u1004/Documents/audio/git_task/ast/pretrained_models/speechcommands_10_10_0.9812.pth'
-data_train = '/home/S3G-LABS/u1004/Documents/audio/git_task/ast/data/datafiles/speechcommand_train_data.json'
-data_val = '/home/S3G-LABS/u1004/Documents/audio/git_task/ast/data/datafiles/speechcommand_eval_data.json'
-label_csv = '/home/S3G-LABS/u1004/Documents/audio/git_task/ast/data/speechcommands_class_labels_indices.csv'
+ckpt_path = 'checkpoints/ast.pth'
+data_train = 'dataset/speechcommand/speechcommand_train_data.json'
+data_val = 'dataset/speechcommand/speechcommand_eval_data.json'
+label_csv = 'dataset/speechcommand/speechcommands_class_labels_indices.csv'
 audio_conf = {'num_mel_bins': 128, 'target_length': 128, 'freqm': 48, 'timem': 48, 'mixup': 0, 'dataset': 'speechcommands', 'mode': 'train', 'mean': -6.845978, 'std': 5.5654526, 'noise': True}
 val_audio_conf = {'num_mel_bins': 128, 'target_length': 128, 'freqm': 0, 'timem': 0, 'mixup': 0, 'dataset': 'speechcommands', 'mode': 'evaluation', 'mean': -6.845978, 'std': 5.5654526, 'noise': False}
 
@@ -45,11 +45,9 @@ class ASTModel(BaseModel):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
         self.init_dataloader()
-        a = 1
     
     def evaluate(self):
         self.model = self.model.to(self.device)
-        # switch to evaluate mode
         self.model.eval()
 
         A_predictions = []
@@ -76,9 +74,6 @@ class ASTModel(BaseModel):
 
         eval_acc = stats[0]['acc']
         eval_mAUC = np.mean([stat['auc'] for stat in stats])
-        print('---------------evaluate on the test set---------------')
-        print("Accuracy: {:.6f}".format(eval_acc))
-        print("AUC: {:.6f}".format(eval_mAUC))
 
         logger.info("Accuracy: {:.6f}".format(eval_acc))
         logger.info("AUC: {:.6f}".format(eval_mAUC))
@@ -86,9 +81,8 @@ class ASTModel(BaseModel):
         self.model = self.model.cuda()
         self.model.eval()
     
-    def train_calib(self):
+    def objective_function(self):
         self.model = self.model.to(self.device)
-        # switch to evaluate mode
         self.model.eval()
 
         A_predictions = []
@@ -119,7 +113,7 @@ class ASTModel(BaseModel):
         eval_acc = stats[0]['acc']
         eval_mAUC = np.mean([stat['auc'] for stat in stats])
 
-        return 1 - eval_acc, 0
+        return 1 - eval_acc
     
     def load(self):
         sd = torch.load(ckpt_path, map_location=self.device)
@@ -229,8 +223,6 @@ class ASTModel(BaseModel):
             compile_spec,
             "torchscript_file/ast/trt_ast.ts"
         )
-
-        a = 1
     
     def benchmark(self, mode="int"):
 

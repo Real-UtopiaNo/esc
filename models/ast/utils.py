@@ -30,33 +30,22 @@ class AudiosetDataset(Dataset):
 
         self.data = data_json['data']
         self.audio_conf = audio_conf
-        print('---------------the {:s} dataloader---------------'.format(self.audio_conf.get('mode')))
         self.melbins = self.audio_conf.get('num_mel_bins')
         self.freqm = self.audio_conf.get('freqm')
         self.timem = self.audio_conf.get('timem')
-        print('now using following mask: {:d} freq, {:d} time'.format(self.audio_conf.get('freqm'), self.audio_conf.get('timem')))
         self.mixup = self.audio_conf.get('mixup')
-        print('now using mix-up with rate {:f}'.format(self.mixup))
         self.dataset = self.audio_conf.get('dataset')
-        print('now process ' + self.dataset)
         # dataset spectrogram mean and std, used to normalize the input
         self.norm_mean = self.audio_conf.get('mean')
         self.norm_std = self.audio_conf.get('std')
         # skip_norm is a flag that if you want to skip normalization to compute the normalization stats using src/get_norm_stats.py, if Ture, input normalization will be skipped for correctly calculating the stats.
         # set it as True ONLY when you are getting the normalization stats.
         self.skip_norm = self.audio_conf.get('skip_norm') if self.audio_conf.get('skip_norm') else False
-        if self.skip_norm:
-            print('now skip normalization (use it ONLY when you are computing the normalization stats).')
-        else:
-            print('use dataset mean {:.3f} and std {:.3f} to normalize the input.'.format(self.norm_mean, self.norm_std))
         # if add noise for data augmentation
         self.noise = self.audio_conf.get('noise')
-        if self.noise == True:
-            print('now use noise augmentation')
 
         self.index_dict = make_index_dict(label_csv)
         self.label_num = len(self.index_dict)
-        print('number of classes is {:d}'.format(self.label_num))
 
     def _wav2fbank(self, filename, filename2=None):
         # mixup
