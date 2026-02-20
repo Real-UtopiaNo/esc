@@ -23,14 +23,14 @@ import time
 
 logger = logging.getLogger("my_app")
 
-ckpt_path = '/home/S3G-LABS/u1004/Documents/audio/git_task/ECAPA-TDNN/exps/pretrain.model'
-eval_list = '/home/S3G-LABS/u1004/Documents/dataset/voxceleb/veri_test2.txt'
-eval_path = '/home/S3G-LABS/u1004/Documents/dataset/voxceleb/voxceleb1'
+ckpt_path = 'checkpoints/ecapa.model'
+eval_list = 'dataset/voxceleb/veri_test2.txt'
+eval_path = 'dataset/voxceleb/voxceleb1'
 
-train_list = '/home/S3G-LABS/u1004/Documents/dataset/voxceleb/train_list.txt'
-train_path = '/home/S3G-LABS/u1004/Documents/dataset/voxceleb/voxceleb2'
+train_list = 'dataset/voxceleb/train_list.txt'
+train_path = 'dataset/voxceleb/voxceleb2'
 
-calib_list = '/home/S3G-LABS/u1004/Documents/dataset/voxceleb/veri_train.txt'
+calib_list = 'dataset/voxceleb/veri_train.txt'
 
 #min, max in valid 397 and 1302
 compile_spec = {"inputs": [torch_tensorrt.Input(min_shape=[1, 80, 397],
@@ -56,7 +56,6 @@ class ECAPAModel(BaseModel):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
         self.init_dataloader()
-        a = 1
     
     def evaluate(self):
         self.model = self.model.to(self.device)
@@ -105,11 +104,10 @@ class ECAPAModel(BaseModel):
         fnrs, fprs, thresholds = ComputeErrorRates(scores, labels)
         minDCF, _ = ComputeMinDcf(fnrs, fprs, thresholds, 0.05, 1, 1)
 
-        print("EER %2.2f%%, minDCF %.4f%%"%(EER, minDCF))
         logger.info("EER %2.2f%%, minDCF %.4f%%"%(EER, minDCF))
         #EER 0.97%, minDCF 0.0717%
     
-    def train_calib(self, validate=False):
+    def objective_function(self, validate=False):
         self.model = self.model.to(self.device)
         self.model.eval()
 
@@ -185,69 +183,9 @@ class ECAPAModel(BaseModel):
         EER = tuneThresholdfromScore(scores, labels, [1, 0.1])[1]
         return EER / 100, avg_loss
     
-    def train_calib_2(self):
-        self.model = self.model.to(self.device)
-        self.model.eval()
-
-        total_loss = 0.0
-        layers_to_quantize=[nn.Conv1d, nn.Conv2d, nn.Linear, nn.LayerNorm]
-
-        embeddings = {}
-        for idx, file in enumerate(self.calib_loader):
-            audio, _  = soundfile.read(file)
-            # Full utterance
-            data_1 = torch.FloatTensor(np.stack([audio],axis=0)).cuda()
-
-            # Spliited utterance matrix
-            max_audio = 300 * 160 + 240
-            if audio.shape[0] <= max_audio:
-                shortage = max_audio - audio.shape[0]
-                audio = np.pad(audio, (0, shortage), 'wrap')
-            feats = []
-            startframe = np.linspace(0, audio.shape[0]-max_audio, num=5)
-            for asf in startframe:
-                feats.append(audio[int(asf):int(asf)+max_audio])
-            feats = np.stack(feats, axis = 0).astype(float)
-            data_2 = torch.FloatTensor(feats).cuda()
-            # Speaker embeddings
-            with torch.no_grad():
-                embedding_1_q = self.model(data_1)
-                embedding_1_q = F.normalize(embedding_1_q, p=2, dim=1)
-                embedding_2_q = self.model(data_2)
-                embedding_2_q = F.normalize(embedding_2_q, p=2, dim=1)
-            
-            for name, module in self.model.named_modules():
-                if hasattr(module, "input_quantizer") and any(isinstance(module, t) for t in layers_to_quantize):
-                    module.input_quantizer.disable()
-            
-            with torch.no_grad():
-                embedding_1 = self.model(data_1)
-                embedding_1 = F.normalize(embedding_1, p=2, dim=1)
-                embedding_2 = self.model(data_2)
-                embedding_2 = F.normalize(embedding_2, p=2, dim=1)
-
-            for name, module in self.model.named_modules():
-                if hasattr(module, "input_quantizer") and any(isinstance(module, t) for t in layers_to_quantize):
-                    module.input_quantizer.enable()
-            
-            loss = F.mse_loss(embedding_1, embedding_1_q).item() + F.mse_loss(embedding_2, embedding_2_q).item()
-            total_loss += loss
-        
-        avg_loss = total_loss / idx
-        #print(f"Total Samples: {sample_count}")
-        #print(f"Average CER: {avg_cer:.4f}")
-        return avg_loss
-    
     def load(self):
         checkpoint = torch.load(ckpt_path)
         checkpoint_new = OrderedDict()
-
-        # prefix = "speaker_encoder."
-
-        # for k, v in checkpoint.items():
-        #     if k.startswith(prefix):
-        #         new_key = k[len(prefix):]   # remove "encoder."
-        #         checkpoint_new[new_key] = v
 
         old_prefix = "speaker_encoder."
 
@@ -270,8 +208,6 @@ class ECAPAModel(BaseModel):
     
     def init_dataloader(self):
         """Initialize dataloader"""
-
-
         files = []
         lines = open(eval_list).read().splitlines()
         for line in lines:
@@ -291,7 +227,7 @@ class ECAPAModel(BaseModel):
         train_setfiles.sort()
         self.train_loader = train_setfiles
 
-        self.calib_loader = sample_with_pairs(self.train_loader, n=100) #can change hyperparam 100 later
+        self.calib_loader = sample_with_pairs(self.train_loader, n=100)
         generate_pairs(self.calib_loader, output_file=calib_list)
 
     def collect_stats(self, num_calib_batch):
@@ -397,7 +333,6 @@ class ECAPAModel(BaseModel):
         jit_path = "torchscript_file/ecapa/ecapa_model.jit.pt"
 
         if not os.path.exists(jit_path):
-        #if True:
             self.model.eval()
             for i, file in enumerate(self.calib_loader):
                 audio, _  = soundfile.read(file)
