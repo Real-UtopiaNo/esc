@@ -25,9 +25,9 @@ import numpy as np
 
 logger = logging.getLogger("my_app")
 
-ckpt_path = "/home/S3G-LABS/u1004/Documents/audio/git_task/Conformer/conformer_checkpoint.ckpt"
-token_path = "/home/S3G-LABS/u1004/Documents/audio/git_task/Conformer/assets/tokens.txt"
-data_path = "/home/S3G-LABS/u1004/Documents/audio/git_task/FastSpeech2/raw_data/LJSpeech"
+ckpt_path = "checkpoints/conformer.ckpt"
+token_path = "dataset/conformer/tokens.txt"
+data_path = "dataset/conformer/LJSpeech"
 
 compile_spec_encoder_conv = {"inputs": [torch_tensorrt.Input([1, 734, 80])],
                 "enabled_precisions": {torch.int8},
@@ -81,7 +81,6 @@ class ConformerModel(BaseModel):
             tokens = f.read().splitlines()
         self.decoder = GreedyCTCDecoder(tokens)
         self.init_dataloader()
-        a = 1
     
     def evaluate(self):
         self.model = self.model.cuda()
@@ -92,7 +91,6 @@ class ConformerModel(BaseModel):
 
         iterable = enumerate(self.val_dataset)
 
-        print("🚀 Transcribing and evaluating...")
         for idx, (waveform, sample_rate, reference, *_ ) in tqdm(iterable, total=len(self.val_dataset), desc="Processing"):
             try:
                 waveform = load_featurizer()(waveform)
@@ -118,19 +116,15 @@ class ConformerModel(BaseModel):
                 continue
 
         if sample_count == 0:
-            print("❌ No samples processed. Evaluation aborted.")
+            logger.info("❌ No samples processed. Evaluation aborted.")
         else:
             avg_wer = total_wer / sample_count
             avg_cer = total_cer / sample_count
-            print("\n✅ Evaluation Complete!")
-            print(f"Total Samples: {sample_count}")
-            print(f"Average WER: {avg_wer:.4f}")
-            print(f"Average CER: {avg_cer:.4f}")
 
             logger.info(f"Average WER: {avg_wer:.4f}")
             logger.info(f"Average CER: {avg_cer:.4f}")
     
-    def train_calib(self, validate=False):
+    def objective_function(self, validate=False):
         self.model = self.model.cuda()
         self.model.eval()
 
@@ -147,7 +141,6 @@ class ConformerModel(BaseModel):
         loader = DataLoader(subset, batch_size=1, num_workers=4)
 
         total_cer = 0.0
-        total_loss = 0.0
         sample_count = 0
 
         with torch.no_grad():
@@ -179,101 +172,9 @@ class ConformerModel(BaseModel):
                         if hasattr(module, "input_quantizer") and any(isinstance(module, t) for t in layers_to_quantize):
                             module.input_quantizer.enable()
 
-                    loss = F.mse_loss(emission_ori, emission).item()
-                    total_loss += loss
-
         avg_cer = total_cer / sample_count
-        avg_loss = total_loss / sample_count
-        return avg_cer, avg_loss
+        return avg_cer
     
-    def train_calib_2(self):
-        self.model = self.model.cuda()
-        self.model.eval()
-
-        total_loss = 0.0
-        sample_count = 0
-        layers_to_quantize=[nn.Conv1d, nn.Conv2d, nn.Linear, nn.LayerNorm]
-
-        iterable = enumerate(self.train_dataset)
-
-        for idx, (waveform, sample_rate, reference, *_ ) in iterable:
-            waveform = load_featurizer()(waveform)
-            waveform = waveform.to("cuda")
-            waveform = waveform.permute(0, 2, 1)
-
-            emission_q = self.model(waveform)
-
-            for name, module in self.model.named_modules():
-                if hasattr(module, "input_quantizer") and any(isinstance(module, t) for t in layers_to_quantize):
-                    module.input_quantizer.disable()
-            
-            emission = self.model(waveform)
-
-            for name, module in self.model.named_modules():
-                if hasattr(module, "input_quantizer") and any(isinstance(module, t) for t in layers_to_quantize):
-                    module.input_quantizer.enable()
-
-            loss = F.mse_loss(emission, emission_q).item()
-            total_loss += loss
-
-            sample_count += 1
-
-        
-            if idx > 100:
-                break
-
-        avg_loss = total_loss / sample_count
-        #print(f"Total Samples: {sample_count}")
-        #print(f"Average CER: {avg_cer:.4f}")
-        return avg_loss
-        
-    def train_calib_3(self):
-        self.model = self.model.cuda()
-        self.model.eval()
-
-        total_cer = 0.0
-        sample_count = 0
-
-        first_100 = Subset(self.train_dataset, range(100))
-
-        # Step 2: randomly choose 10 from those 100
-        indices = torch.randperm(100)[:10].tolist()
-        subset_10 = Subset(first_100, indices)
-
-        # Step 3: iterate
-        iterable = enumerate(subset_10)
-
-        for idx, (waveform, sample_rate, reference, *_ ) in iterable:
-            try:
-                waveform = load_featurizer()(waveform)
-                waveform = waveform.to("cuda")
-                waveform = waveform.permute(0, 2, 1)
-
-                emission = self.model(waveform)
-
-                greedy_result = self.decoder(emission[0])
-                prediction = " ".join(greedy_result)
-
-                reference = reference.lower()
-                prediction = prediction.lower()
-
-                sample_cer = cer(reference, prediction)
-                total_cer += sample_cer
-                sample_count += 1
-
-            except Exception as e:
-                tqdm.write(f"[{idx}] ⚠️ Error during transcription: {e}")
-                continue
-        
-            if idx > 100:
-                break
-
-
-            avg_cer = total_cer / sample_count
-            #print(f"Total Samples: {sample_count}")
-            #print(f"Average CER: {avg_cer:.4f}")
-            return avg_cer
-        
     def load(self):
         checkpoint = torch.load(ckpt_path, weights_only=True, map_location="cpu")
         model_state_dict = checkpoint['state_dict']
@@ -317,7 +218,6 @@ class ConformerModel(BaseModel):
             elif k.startswith('model.decoder.'):
                 name = k.replace('model.decoder.', '')
                 decoder_state_dict[name] = v
-    
 
         # Load state dictionaries into the model
         self.model.encoder.load_state_dict(encoder_state_dict)
@@ -326,7 +226,6 @@ class ConformerModel(BaseModel):
     def init_dataloader(self):
         """Initialize dataloader"""
         self.val_dataset = LIBRISPEECH(data_path, url="test-clean", download=False)
-        #self.val_dataset = Subset(self.val_dataset, range(100)) #to remove when final eval
         self.train_dataset = LIBRISPEECH(data_path, url="train-clean-100", download=False)
     
     def collect_stats(self, num_calib_batch):
@@ -454,9 +353,7 @@ class ConformerModel(BaseModel):
                 )
                 
             self.trt_encoder_layers.append(trt_layer)
-        
-        a = 1
-    
+            
     def benchmark(self, mode="int"):
 
         assert mode in ["int", "fp32"], "mode must be 'int' or 'fp32'"

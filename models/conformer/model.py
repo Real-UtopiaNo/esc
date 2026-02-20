@@ -170,21 +170,6 @@ class RelativeMultiHeadAttention(nn.Module):
         output = self.W_out(output)
         return self.dropout(output)
 
-    # original
-    # def rel_shift(self, emb):
-    #     """
-    #     Pad and shift form relative positional encodings.
-    #     Taken from Transformer-XL implementation: https://github.com/kimiyoung/transformer-xl/blob/master/pytorch/mem_transformer.py
-    #     """
-    #     batch_size, num_heads, seq_length1, seq_length2 = emb.size()
-    #     zeros = emb.new_zeros(batch_size, num_heads, seq_length1, 1)
-    #     padded_emb = torch.cat([zeros, emb], dim=-1)
-    #     padded_emb = padded_emb.view(
-    #         batch_size, num_heads, seq_length2 + 1, seq_length1
-    #     )
-    #     shifted_emb = padded_emb[:, :, 1:].view_as(emb)
-    #     return shifted_emb
-
     def rel_shift(self, emb):
         # emb: (B, H, L, L)
         B, H, L1, L2 = emb.shape
@@ -227,13 +212,6 @@ class ConvBlock(nn.Module):
         self.module = nn.Sequential(
             nn.Conv1d(in_channels=d_model, out_channels=d_model * 2, kernel_size=1),
             nn.GLU(dim=1),
-            # nn.Conv1d(
-            #     in_channels=d_model,
-            #     out_channels=d_model,
-            #     kernel_size=kernel_size,
-            #     padding="same",
-            #     groups=d_model,
-            # ),
             nn.ConstantPad1d((pad_left, pad_right), 0),  # pad last dimension
             nn.Conv1d(
                 in_channels=d_model,
@@ -247,7 +225,6 @@ class ConvBlock(nn.Module):
             nn.Conv1d(in_channels=d_model, out_channels=d_model, kernel_size=1),
             nn.Dropout(dropout),
         )
-        a = 1
 
     def forward(self, x):
         x = self.layer_norm(x)
