@@ -209,6 +209,7 @@ if __name__ == "__main__":
 
     model_ptq.pre_calibration(ptq)
 
+    logger.info('Calibration start')
     if args.precompute_scale is None:
         set_calibrators(model_ptq)
         calibrate_model(
@@ -295,6 +296,9 @@ if __name__ == "__main__":
         if not os.path.exists(path):
             save_scale(model_ptq, path)
     
+    if ptq is not None:
+        logger.info(f'PTQ {ptq} starts')
+
     if ptq == "adaround":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantConv1d, pytorch_quantization.nn.QuantConv2d, pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
         model = init_ptq(model_ptq.model, ptq, layers_input=layers_input, max_iter=args.iter_adaround)
@@ -333,5 +337,6 @@ if __name__ == "__main__":
         model_ptq.evaluate()
 
     if args.export:
+        logger.info('Export')
         model_ptq.export()
         model_ptq.benchmark(mode="int")
