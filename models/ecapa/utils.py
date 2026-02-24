@@ -143,7 +143,7 @@ def sample_with_pairs(files, n, seed=42):
 
     return selected
 
-def generate_pairs(subset, seed=42, output_file='/home/S3G-LABS/u1004/Documents/dataset/voxceleb/veri_train.txt', count = 100):
+def generate_pairs(subset, seed=42, output_file='dataset/voxceleb/veri_train.txt', count = 100):
     """
     Given a subset of files, generate pairs:
     - 1 if same speaker
