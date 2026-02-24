@@ -307,6 +307,7 @@ class ConformerModel(BaseModel):
         quant_nn.TensorQuantizer.use_fb_fake_quant = True
 
         jit_path = "torchscript_file/conformer/conformer_model.jit.pt"
+        os.makedirs(os.path.dirname(jit_path), exist_ok=True)
 
         if not os.path.exists(jit_path):
             self.model.eval()

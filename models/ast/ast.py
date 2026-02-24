@@ -202,6 +202,7 @@ class ASTModel(BaseModel):
         quant_nn.TensorQuantizer.use_fb_fake_quant = True
 
         jit_path = "torchscript_file/ast/ast_model.jit.pt"
+        os.makedirs(os.path.dirname(jit_path), exist_ok=True)
 
         model_to_trace = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
 

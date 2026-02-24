@@ -220,6 +220,7 @@ class FastSpeech2Model(BaseModel):
 
         jit_path_encoder = "torchscript_file/fastspeech2/fastspeech2_model_encoder.jit.pt"
         jit_path_decoder = "torchscript_file/fastspeech2/fastspeech2_model_decoder.jit.pt"
+        os.makedirs(os.path.dirname(jit_path_encoder), exist_ok=True)
 
         if not os.path.exists(jit_path_encoder) or not os.path.exists(jit_path_decoder):
             self.model.eval()

@@ -65,6 +65,11 @@ def get_args():
         default=None,
         help="Path to precompute scale (default: None)",
     )
+    parser.add_argument(
+        "--export",
+        action="store_true",
+        help="If we export and benchmark the INT8 model",
+    )
     #esc
     parser.add_argument(
         "--esc",
@@ -279,6 +284,10 @@ if __name__ == "__main__":
             
             # with open(f"scale/dict_amax_{model_name}_{num_bits}_esc_{sigma:.3f}_{j}.pkl", "wb") as f:
             #     pickle.dump(dict_amax_esc, f)
+    
+    if args.export:
+        model_ptq.export()
+        model_ptq.benchmark(mode="int")
 
     if ptq == "adaround":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantConv1d, pytorch_quantization.nn.QuantConv2d, pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
