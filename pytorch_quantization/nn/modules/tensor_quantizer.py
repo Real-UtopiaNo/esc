@@ -361,9 +361,6 @@ class TensorQuantizer(nn.Module):
                 outputs = fake_tensor_quant(inputs, amax, self._num_bits, self._unsigned, self._narrow_range, self.ptq, dict)
             else:
                 if inputs.dtype == torch.half or amax.dtype == torch.half:
-                #     if inputs.dtype == torch.half:
-                #         inputs = inputs.float()
-                #     if amax.dtype == torch.half:
                     raise Exception("Exporting to ONNX in fp16 is not supported. Please export in fp32, i.e. disable AMP.")
                 outputs = self._fb_fake_quant(inputs, amax)
         else:

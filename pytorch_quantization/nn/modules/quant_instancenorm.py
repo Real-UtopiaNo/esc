@@ -51,14 +51,11 @@ class QuantInstanceNorm1d(instancenorm.InstanceNorm1d, _utils.QuantInputMixin):
         quant_input = self._input_quantizer(input)
         return super(QuantInstanceNorm1d, self).forward(quant_input)
 
-#class QuantInstanceNorm2d(instancenorm.InstanceNorm2d, _utils.QuantMixin):
 class QuantInstanceNorm2d(nn.InstanceNorm2d, _utils.QuantMixin):
-#class QuantInstanceNorm2d(instancenorm.InstanceNorm2d, _utils.QuantInputMixin):
     r"""Applies Quantized Instance Normalization over a 4D input
     """
 
     default_quant_desc_input = tensor_quant.QUANT_DESC_8BIT_PER_TENSOR
-    #default_quant_desc_weight = tensor_quant.QUANT_DESC_8BIT_LINEAR_WEIGHT_PER_ROW
     default_quant_desc_weight = tensor_quant.QUANT_DESC_8BIT_INSTANCENORM_WEIGHT_PER_CHANNEL
 
     def __init__(
@@ -69,9 +66,6 @@ class QuantInstanceNorm2d(nn.InstanceNorm2d, _utils.QuantMixin):
         if affine:
             quant_desc_input, quant_desc_weight = _utils.pop_quant_desc_in_kwargs(self.__class__, **kwargs)
             self.init_quantizer(quant_desc_input, quant_desc_weight)
-            #self.quant_weight = self._weight_quantizer(self.weight)
-            #self.quant_weight = self.quant_weight.cuda()
-            a = 1
             self.calib = False
         else:
             quant_desc_input = _utils.pop_quant_desc_in_kwargs(self.__class__, input_only=True, **kwargs)
@@ -82,8 +76,6 @@ class QuantInstanceNorm2d(nn.InstanceNorm2d, _utils.QuantMixin):
         with torch.no_grad():
             self.weight.copy_(quant_weight)
         self.calib = True
-        a = 2
-
 
     def forward(self, input):
         if self.affine:
@@ -94,53 +86,12 @@ class QuantInstanceNorm2d(nn.InstanceNorm2d, _utils.QuantMixin):
                 quant_weight = self._weight_quantizer(self.weight)
                 quant_weight = quant_weight.detach()  # avoid gradient
                 output = F.instance_norm(quant_input, weight=self.weight)
-            
-            #print('Instance')
-            #print(self._weight_quantizer.extra_repr())
-
-            '''print('quant')
-            print(quant_weight)
-
-            print('original')
-            print(self.weight)
-            print('________________')'''
-            #output = F.instance_norm(quant_input, weight=self.weight)
-            #output = super(QuantInstanceNorm2d, self).forward(quant_input)
-
-            '''num_unique_input = torch.unique(quant_input).numel()
-            num_unique_weight = torch.unique(quant_weight).numel()
-            num_unique_weight2 = torch.unique(self.weight).numel()
-            num_unique_output = torch.unique(output).numel()'''
             return output
         else:
             quant_input = self._input_quantizer(input)
             output = super(QuantInstanceNorm2d, self).forward(quant_input)
             num_unique_output = torch.unique(output).numel()
             return output
-    
-    '''@property
-    def input_quantizer(self):
-        return self._input_quantizer
-
-    @property
-    def weight_quantizer(self):
-        return self._weight_quantizer'''
-
-'''class QuantInstanceNorm2d(nn.InstanceNorm2d, _utils.QuantInputMixin):
-    r"""Applies Quantized Instance Normalization over a 4D input
-    """
-    def __init__(
-            self, num_features: int, eps: float = 1e-5, momentum: float = 0.1, affine: bool = False,
-            track_running_stats: bool = False, **kwargs):
-        super(QuantInstanceNorm2d, self).__init__(
-            num_features, eps, momentum, affine, track_running_stats)
-        quant_desc_input = _utils.pop_quant_desc_in_kwargs(self.__class__, input_only=True, **kwargs)
-        self.init_quantizer(quant_desc_input)
-
-    def forward(self, input):
-        quant_input = self._input_quantizer(input)
-        return super(QuantInstanceNorm2d, self).forward(quant_input)'''
-
 
 class QuantInstanceNorm3d(instancenorm.InstanceNorm3d, _utils.QuantInputMixin):
     r"""Applies Quantized Instance Normalization over a 5D input

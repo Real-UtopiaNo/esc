@@ -55,8 +55,6 @@ class QuantRNNBase(nn.Module, _utils.QuantMixin):
         self.bias = bias
 
         self.dyna_first = batch_first
-        #self.forward_fn = self.forward_dyna_first if self.dyna_first else self.forward_dyna_second
-        #self.forward_fn = self.forward_dyna_second
 
         self.batch_first = False
         self.dropout = dropout
@@ -198,14 +196,10 @@ class QuantRNNBase(nn.Module, _utils.QuantMixin):
             check_hidden_size(hidden, expected_hidden_size)
     
     def forward(self, input, hx=None):
-        #if dyna_first:
-        #return self.forward_fn(input, hx)
         if input.shape[1] != 101:
             return self.forward_dyna_first(input, hx)
         else:
             return self.forward_dyna_second(input, hx)
-
-
 
     def forward_dyna_first(self, input, hx=None):
         is_packed = isinstance(input, PackedSequence)
@@ -217,27 +211,11 @@ class QuantRNNBase(nn.Module, _utils.QuantMixin):
             batch_sizes = None
             max_batch_size = input.size(0) if self.batch_first else input.size(1)
 
-        #max_batch_size = 550
-        '''num_directions = 2 if self.bidirectional else 1'''
-        '''hx = input.new_zeros(self.num_layers * num_directions,
-                                max_batch_size, self.hidden_size,
-                                requires_grad=False)'''
-        '''hx = torch.zeros(self.num_layers * num_directions,
-                max_batch_size, self.hidden_size,
-                device=input.device, dtype=input.dtype,
-                requires_grad=False)
-        hx = hx[:,:input.shape[1]]'''
-
         if hx is None:
             num_directions = 2 if self.bidirectional else 1
             hx = input.new_zeros(self.num_layers * num_directions,
                                 max_batch_size, self.hidden_size,
                                 requires_grad=False)
-            '''hx = torch.zeros(self.num_layers * num_directions,
-                 max_batch_size, self.hidden_size,
-                 device=input.device, dtype=input.dtype,
-                 requires_grad=False)
-            hx = hx[:,:input.shape[1]]'''
             if self.mode == 'LSTM':
                 hx = (hx, hx)
 
@@ -363,9 +341,6 @@ class QuantRNNBase(nn.Module, _utils.QuantMixin):
         T, B, _ = input.shape
         T, B, _ = input.size()
 
-        #h_f = torch.zeros(B, self.hidden_size, device=input.device)
-        #h_b = torch.zeros(B, self.hidden_size, device=input.device)
-
         input_f = self._input_quantizers[0](input)
         input_b = self._input_quantizers[1](input)
         h_f = self._input_quantizers[0](hx)[0]
@@ -378,26 +353,7 @@ class QuantRNNBase(nn.Module, _utils.QuantMixin):
         weight_ih_l0_reverse = self._weight_quantizers[1](self.weight_ih_l0_reverse)
 
         out_f = torch.cat([input_f, input_f], dim=2)
-        #out_b = torch.cat([input_b, input_b], dim=2)
-
-        #out_f = []
-        #out_b = []
-
-        #out_f = torch.zeros(T, B, self.hidden_size, device=input.device)
-        #out_b = torch.zeros(T, B, self.hidden_size, device=input.device)
-
-        #return torch.cat([input_f, input_b], dim=2), 1
-
-        #return out_f, 1
-        '''x_t = input_f[0]
-        hy = self.GRUCellCustom(x_t, h_f, weight_ih_l0, weight_hh_l0, self.bias_ih_l0, self.bias_hh_l0)
-
-        #h_f = _VF.gru_cell(x_t, h_f, weight_ih_l0, weight_hh_l0, self.bias_ih_l0, self.bias_hh_l0)
-        x_expanded = hy[0].unsqueeze(0)             # Shape: (1, 535, 64)
-        x_repeated = x_expanded.repeat(101, 1, 1)
-
-        return x_repeated, 1'''
-
+    
         gi_all = F.linear(input_f, weight_ih_l0, self.bias_ih_l0)  # shape: (T, batch, 3*hidden_size)
         split_size = 128
 
@@ -423,31 +379,8 @@ class QuantRNNBase(nn.Module, _utils.QuantMixin):
 
             out_f[t] = h_f
 
-        # Forward pass
-        '''for t in range(5):
-            x_t = input_f[t]
-            #h_f = _VF.gru_cell(x_t, h_f, weight_ih_l0, weight_hh_l0, self.bias_ih_l0, self.bias_hh_l0)
-            h_f = self.GRUCellCustom(x_t, h_f, weight_ih_l0, weight_hh_l0, self.bias_ih_l0, self.bias_hh_l0)
-            #out_f.append(h_f)
-            out_f[t] = h_f
-            #out_f.append(h_f.unsqueeze(0))'''
         
         return out_f, 1
-
-        # Backward pass
-        #for t in reversed(range(T)):
-        '''for t in range(T - 1, -1, -1):
-            x_t = input_b[t]
-            h_b = _VF.gru_cell(x_t, h_b, weight_ih_l0_reverse, weight_hh_l0_reverse, self.bias_ih_l0_reverse, self.bias_hh_l0_reverse)
-            out_b[t] = h_b
-            #out_b.insert(0, h_b.unsqueeze(0))'''
-        
-        #return torch.cat([input_f, input_b], dim=2), 1
-        # Concatenate outputs
-        #out_f = torch.cat(out_f, dim=0)  # (B, T, H)
-        #out_b = torch.cat(out_b, dim=0)  # (B, T, H)
-        return torch.stack(out_f, dim=0), 1
-        return torch.cat([out_f, out_b], dim=2), 1  # (B, T, 2H)
     
     def GRUCellCustom(self, x_t, h_f, weight_ih, weight_hh, bias_ih, bias_hh):
         gi = F.linear(x_t, weight_ih, bias_ih)
@@ -539,155 +472,6 @@ class QuantLSTM(QuantRNNBase):
     def __init__(self, *args, **kwargs):
         super(QuantLSTM, self).__init__('LSTM', *args, **kwargs)
 
-
-'''class QuantGRU(QuantRNNBase):
-    r"""Applies a multi-layer gated recurrent unit (GRU) RNN to an input sequence.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super(QuantGRU, self).__init__('GRU', *args, **kwargs)
-    
-    def forward(self, input, hx=None):
-        is_packed = isinstance(input, PackedSequence)
-        if is_packed:
-            input, batch_sizes, sorted_indices, unsorted_indices = input
-            max_batch_size = batch_sizes[0]
-            max_batch_size = int(max_batch_size)
-        else:
-            batch_sizes = None
-            max_batch_size = input.size(0) if self.batch_first else input.size(1)
-
-        if hx is None:
-            num_directions = 2 if self.bidirectional else 1
-            hx = input.new_zeros(self.num_layers * num_directions,
-                                max_batch_size, self.hidden_size,
-                                requires_grad=False)
-            if self.mode == 'LSTM':
-                hx = (hx, hx)
-        
-        hx = torch.zeros(self.num_layers * 2,
-                 600, self.hidden_size,
-                 device=input.device, dtype=input.dtype,
-                 requires_grad=False)
-        hx = hx[:,:input.shape[1]]
-
-        has_flat_weights = list(p.data.data_ptr() for p in self.parameters()) == self._data_ptrs
-        if has_flat_weights:
-            first_data = next(self.parameters()).data
-            assert first_data.storage().size() == self._param_buf_size
-            flat_weight = first_data.new().set_(first_data.storage(), 0, torch.Size([self._param_buf_size]))
-        else:
-            flat_weight = None
-
-        #self.check_forward_args(input, hx, batch_sizes)
-        func = quant_rnn.RNN(
-            self.mode,
-            self.input_size,
-            self.hidden_size,
-            num_layers=self.num_layers,
-            batch_first=self.batch_first,
-            dropout=self.dropout,
-            train=self.training,
-            bidirectional=self.bidirectional,
-            dropout_state=self.dropout_state,
-            variable_length=is_packed,
-            flat_weight=flat_weight
-        )
-        output, hidden = func(input, self.all_weights, hx, batch_sizes, self._input_quantizers, self._weight_quantizers)
-        if is_packed:
-            output = PackedSequence(output, batch_sizes)
-        return output, hidden'''
-
-'''class QuantGRU2(QuantRNNBase):
-    r"""Applies a multi-layer gated recurrent unit (GRU) RNN to an input sequence.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super(QuantGRU2, self).__init__('GRU', *args, **kwargs)
-    
-    def forward(self, input, hx):
-        has_flat_weights = list(p.data.data_ptr() for p in self.parameters()) == self._data_ptrs
-        if has_flat_weights:
-            first_data = next(self.parameters()).data
-            assert first_data.storage().size() == self._param_buf_size
-            flat_weight = first_data.new().set_(first_data.storage(), 0, torch.Size([self._param_buf_size]))
-        else:
-            flat_weight = None
-
-        T, B, _ = input.size()
-        split_size = 128  # hidden_size
-
-        # Quantize inputs and initial hidden states
-        input_f = self._input_quantizers[0](input)
-        input_b = self._input_quantizers[1](input)
-        h_f = self._input_quantizers[0](hx)[0]
-        h_b = self._input_quantizers[1](hx)[1]
-
-        # Quantize weights
-        weight_ih_l0 = self._weight_quantizers[0](self.weight_ih_l0)
-        weight_hh_l0 = self._weight_quantizers[0](self.weight_hh_l0)
-        weight_ih_l0_reverse = self._weight_quantizers[1](self.weight_ih_l0_reverse)
-        weight_hh_l0_reverse = self._weight_quantizers[1](self.weight_hh_l0_reverse)
-
-        # Biases
-        bias_ih_l0 = self.bias_ih_l0
-        bias_hh_l0 = self.bias_hh_l0
-        bias_ih_l0_reverse = self.bias_ih_l0_reverse
-        bias_hh_l0_reverse = self.bias_hh_l0_reverse
-
-        # Allocate output tensors in advance
-        out_f = torch.cat([input_f, input_f], dim=2)
-        out_b = torch.cat([input_b, input_b], dim=2)
-
-        # Precompute input linear projections
-        gi_all_f = F.linear(input_f, weight_ih_l0, bias_ih_l0)
-        gi_all_b = F.linear(input_b, weight_ih_l0_reverse, bias_ih_l0_reverse)
-
-        # Forward GRU
-        for t in range(T):
-            gi = gi_all_f[t]
-            gh = F.linear(h_f, weight_hh_l0, bias_hh_l0)
-
-            i_r = gi[:, :split_size]
-            i_i = gi[:, split_size:2*split_size]
-            i_n = gi[:, 2*split_size:]
-
-            h_r = gh[:, :split_size]
-            h_i = gh[:, split_size:2*split_size]
-            h_n = gh[:, 2*split_size:]
-
-            resetgate = torch.sigmoid(i_r + h_r)
-            inputgate = torch.sigmoid(i_i + h_i)
-            newgate = torch.tanh(i_n + resetgate * h_n)
-            h_f = newgate + inputgate * (h_f - newgate)
-
-            out_f[t] = h_f
-
-        # Backward GRU
-        for t in reversed(range(T)):
-            gi = gi_all_b[t]
-            gh = F.linear(h_b, weight_hh_l0_reverse, bias_hh_l0_reverse)
-
-            i_r = gi[:, :split_size]
-            i_i = gi[:, split_size:2*split_size]
-            i_n = gi[:, 2*split_size:]
-
-            h_r = gh[:, :split_size]
-            h_i = gh[:, split_size:2*split_size]
-            h_n = gh[:, 2*split_size:]
-
-            resetgate = torch.sigmoid(i_r + h_r)
-            inputgate = torch.sigmoid(i_i + h_i)
-            newgate = torch.tanh(i_n + resetgate * h_n)
-            h_b = newgate + inputgate * (h_b - newgate)
-
-            out_b[t] = h_b  # Write directly to time step t (not reversed index)
-
-        # Concatenate forward and backward outputs at each timestep
-        out = torch.cat([out_f, out_b], dim=2)  # (T, B, 2*hidden_size)
-
-        return out, 1'''
-
 class QuantGRU(nn.Module, _utils.QuantMixin):
 
     default_quant_desc_weight = tensor_quant.QUANT_DESC_8BIT_LINEAR_WEIGHT_PER_ROW
@@ -704,8 +488,6 @@ class QuantGRU(nn.Module, _utils.QuantMixin):
         self.bias = bias
 
         self.dyna_first = batch_first
-        #self.forward_fn = self.forward_dyna_first if self.dyna_first else self.forward_dyna_second
-        #self.forward_fn = self.forward_dyna_second
 
         self.batch_first = False
         self.dropout = dropout
@@ -907,20 +689,6 @@ class QuantGRU(nn.Module, _utils.QuantMixin):
             batch_sizes = None
             max_batch_size = input.size(0) if self.batch_first else input.size(1)
 
-        '''if hx is None:
-            num_directions = 2 if self.bidirectional else 1
-            hx = input.new_zeros(self.num_layers * num_directions,
-                                max_batch_size, self.hidden_size,
-                                requires_grad=False)
-            if self.mode == 'LSTM':
-                hx = (hx, hx)'''
-        
-        '''hx = torch.zeros(self.num_layers * 2,
-                 600, self.hidden_size,
-                 device=input.device, dtype=input.dtype,
-                 requires_grad=False)
-        hx = hx[:,:input.shape[1]]'''
-
         has_flat_weights = list(p.data.data_ptr() for p in self.parameters()) == self._data_ptrs
         if has_flat_weights:
             first_data = next(self.parameters()).data
@@ -1002,8 +770,6 @@ class QuantGRU2(nn.Module, _utils.QuantMixin):
         self.bias = bias
 
         self.dyna_first = batch_first
-        #self.forward_fn = self.forward_dyna_first if self.dyna_first else self.forward_dyna_second
-        #self.forward_fn = self.forward_dyna_second
 
         self.batch_first = False
         self.dropout = dropout
@@ -1216,9 +982,6 @@ class QuantGRU2(nn.Module, _utils.QuantMixin):
         out_f = torch.cat([input_f, input_f], dim=2)
         out_b = torch.cat([input_b, input_b], dim=2)
         
-
-        #out_f_list, out_b_list = [], []
-
         # Precompute input linear projections
         gi_all_f = F.linear(input_f, weight_ih_l0, bias_ih_l0)
         gi_all_b = F.linear(input_b, weight_ih_l0_reverse, bias_ih_l0_reverse)
@@ -1226,9 +989,6 @@ class QuantGRU2(nn.Module, _utils.QuantMixin):
         # Forward GRU
         for t in range(T):
             gi = gi_all_f[t]
-            #gi_all_f = gi_all_f[1:]
-            #gi = gi_all_f[t]
-            #gi = F.linear(input_f[t], weight_ih_l0, bias_ih_l0)
             gh = F.linear(h_f, weight_hh_l0, bias_hh_l0)
 
             i_r = gi[:, :split_size]
@@ -1243,17 +1003,12 @@ class QuantGRU2(nn.Module, _utils.QuantMixin):
             inputgate = torch.sigmoid(i_i + h_i)
             newgate = torch.tanh(i_n + resetgate * h_n)
             h_f = newgate + inputgate * (h_f - newgate)
-            #h_f = newgate + inputgate * ((h_f.clone()) - newgate) #was before
 
             out_f[t] = h_f
-            #out_f[t].copy_(h_f)
-            #out_f_list.append(h_f)
 
-        #outputs_b = []
         # Backward GRU
         for t in reversed(range(T)):
             gi = gi_all_b[t]
-            #gi = F.linear(input_b[t], weight_ih_l0_reverse, bias_ih_l0_reverse)
             gh = F.linear(h_b, weight_hh_l0_reverse, bias_hh_l0_reverse)
 
             i_r = gi[:, :split_size]
@@ -1271,117 +1026,6 @@ class QuantGRU2(nn.Module, _utils.QuantMixin):
 
             out_b[t] = h_b  # Write directly to time step t (not reversed index)
 
-        #out_f = torch.stack(out_f_list, dim=0)
-        #out_b = torch.stack(list(reversed(out_b_list)), dim=0)
-
-        # Concatenate forward and backward outputs at each timestep
-        #out_b = torch.cat(outputs_b, dim=0)
-        #out_b = torch.stack(outputs_b[::-1], dim=0)
-        out = torch.cat([out_f, out_b], dim=2)  # (T, B, 2*hidden_size)
-
-        return out, 1
-    
-    def forward_ref_old(self, input):
-    #def forward(self, input, hx):
-        '''has_flat_weights = list(p.data.data_ptr() for p in self.parameters()) == self._data_ptrs
-        if has_flat_weights:
-            first_data = next(self.parameters()).data
-            assert first_data.storage().size() == self._param_buf_size
-            flat_weight = first_data.new().set_(first_data.storage(), 0, torch.Size([self._param_buf_size]))
-        else:
-            flat_weight = None'''
-
-        hx = self.zeros
-
-        T, B, _ = input.size()
-        split_size = 128  # hidden_size
-
-        # Quantize inputs and initial hidden states
-        input_f = self._input_quantizers[0](input)
-        input_b = self._input_quantizers[1](input)
-        h_f = self._input_quantizers[0](hx)[0]
-        h_b = self._input_quantizers[1](hx)[1]
-
-        # Quantize weights
-        weight_ih_l0 = self._weight_quantizers[0](self.weight_ih_l0)
-        weight_hh_l0 = self._weight_quantizers[0](self.weight_hh_l0)
-        weight_ih_l0_reverse = self._weight_quantizers[1](self.weight_ih_l0_reverse)
-        weight_hh_l0_reverse = self._weight_quantizers[1](self.weight_hh_l0_reverse)
-
-        # Biases
-        bias_ih_l0 = self.bias_ih_l0
-        bias_hh_l0 = self.bias_hh_l0
-        bias_ih_l0_reverse = self.bias_ih_l0_reverse
-        bias_hh_l0_reverse = self.bias_hh_l0_reverse
-
-        # Allocate output tensors in advance
-        out_f = torch.cat([input_f, input_f], dim=2)
-        out_b = torch.cat([input_b, input_b], dim=2)
-
-        #out_f_list, out_b_list = [], []
-
-        # Precompute input linear projections
-        gi_all_f = F.linear(input_f, weight_ih_l0, bias_ih_l0)
-        gi_all_b = F.linear(input_b, weight_ih_l0_reverse, bias_ih_l0_reverse)
-
-        # Forward GRU
-        for t in range(T):
-            gi = gi_all_f[t]
-            #gi_all_f = gi_all_f[1:]
-            #gi = gi_all_f[t]
-            #gi = F.linear(input_f[t], weight_ih_l0, bias_ih_l0)
-            gh = F.linear(h_f, weight_hh_l0, bias_hh_l0)
-
-            i_r = gi[:, :split_size]
-            i_i = gi[:, split_size:2*split_size]
-            i_n = gi[:, 2*split_size:]
-
-            h_r = gh[:, :split_size]
-            h_i = gh[:, split_size:2*split_size]
-            h_n = gh[:, 2*split_size:]
-
-            resetgate = torch.sigmoid(i_r + h_r)
-            inputgate = torch.sigmoid(i_i + h_i)
-            newgate = torch.tanh(i_n + resetgate * h_n)
-            h_f = newgate + inputgate * (h_f - newgate)
-            #h_f = newgate + inputgate * ((h_f.clone()) - newgate) #was before
-
-            out_f[t] = h_f
-            #out_f_list.append(h_f)
-
-        #outputs_b = []
-        # Backward GRU
-        for t in reversed(range(T)):
-            gi = gi_all_b[t]
-            #gi = F.linear(input_b[t], weight_ih_l0_reverse, bias_ih_l0_reverse)
-            gh = F.linear(h_b, weight_hh_l0_reverse, bias_hh_l0_reverse)
-
-            i_r = gi[:, :split_size]
-            i_i = gi[:, split_size:2*split_size]
-            i_n = gi[:, 2*split_size:]
-
-            h_r = gh[:, :split_size]
-            h_i = gh[:, split_size:2*split_size]
-            h_n = gh[:, 2*split_size:]
-
-            resetgate = torch.sigmoid(i_r + h_r)
-            inputgate = torch.sigmoid(i_i + h_i)
-            newgate = torch.tanh(i_n + resetgate * h_n)
-            h_b = newgate + inputgate * (h_b - newgate)
-            '''prev_h_b = h_b.clone()
-            h_b = newgate + inputgate * (prev_h_b - newgate)'''
-
-            #h_b = newgate + inputgate * ((h_b.clone()) - newgate)
-
-            out_b[t] = h_b  # Write directly to time step t (not reversed index)
-            #out_b_list.append(h_b)
-
-        #out_f = torch.stack(out_f_list, dim=0)
-        #out_b = torch.stack(list(reversed(out_b_list)), dim=0)
-
-        # Concatenate forward and backward outputs at each timestep
-        #out_b = torch.cat(outputs_b, dim=0)
-        #out_b = torch.stack(outputs_b[::-1], dim=0)
         out = torch.cat([out_f, out_b], dim=2)  # (T, B, 2*hidden_size)
 
         return out, 1

@@ -76,96 +76,18 @@ def LSTMCell(input, hidden, w_ih, w_hh, b_ih=None, b_hh=None, input_quantizer=No
     return hy, cy
 
 
-'''def GRUCell(input, hidden, w_ih, w_hh, b_ih=None, b_hh=None):
-    gi = F.linear(input, w_ih, b_ih)
-    gh = F.linear(hidden, w_hh, b_hh)
-    i_r, i_i, i_n = gi.chunk(3, 1)
-    h_r, h_i, h_n = gh.chunk(3, 1)
-
-    resetgate = torch.sigmoid(i_r + h_r)
-    inputgate = torch.sigmoid(i_i + h_i)
-    newgate = torch.tanh(i_n + resetgate * h_n)
-    hy = newgate + inputgate * (hidden - newgate)
-
-    return hy'''
-
 def GRUCell(input, hidden, w_ih, w_hh, b_ih=None, b_hh=None, input_quantizer=None, weight_quantizer=None):
     if input_quantizer is not None:
-        #input, hidden = input_quantizer(torch.cat([input, hidden], 1)).split([input.size(1), hidden.size(1)], 1)
         input = input_quantizer(input)
         hidden = input_quantizer(hidden)
 
     if weight_quantizer is not None:
         w_ih = weight_quantizer(w_ih)
         w_hh = weight_quantizer(w_hh)
-        #w_ih, w_hh = weight_quantizer(torch.cat([w_ih, w_hh], 1)).split([w_ih.size(1), w_hh.size(1)], 1)
 
-    #input_repeated = input.repeat(1, 2)
-
-    #return hidden
-
-    '''gi = F.linear(input, w_ih, b_ih)
-    gh = F.linear(hidden, w_hh, b_hh)
-
-    split_size = gi.size(1) // 3
-    i_r = gi[:, :split_size]
-    i_i = gi[:, split_size:2*split_size]
-    i_n = gi[:, 2*split_size:]
-
-    h_r = gh[:, :split_size]
-    h_i = gh[:, split_size:2*split_size]
-    h_n = gh[:, 2*split_size:]
-
-    return i_r'''
-
-    '''hy = torch.ops.quantized.quantized_gru_cell_dynamic(
-    input, hidden, w_ih, w_hh, b_ih, b_hh
-    )
-
-    return hy'''
-
-    #work when dynamic
-    #########################
     hy = _VF.gru_cell(input, hidden, w_ih, w_hh, b_ih, b_hh)
 
     return hy
-    ###############################
-
-    #i_r, i_i, i_n = gi.chunk(3, 1)
-    #h_r, h_i, h_n = gh.chunk(3, 1)
-
-    #return torch.add(i_r, h_r)
-    #return x
-
-    #return i_r + h_r
-
-
-    '''resetgate = (i_r + h_r).sigmoid()
-    inputgate = (i_i + h_i).sigmoid()
-    newgate = (i_n + (resetgate * h_n)).tanh()
-
-    hy = newgate + inputgate * (hidden - newgate)
-
-    return hy'''
-
-
-    resetgate = torch.sigmoid(i_r + h_r)
-    #return resetgate
-    inputgate = torch.sigmoid(i_i + h_i)
-    newgate = torch.tanh(i_n + resetgate * h_n)
-    #newgate = torch.tanh(i_n + resetgate)
-    #return resetgate * h_n
-    #return newgate
-    hy = newgate + inputgate * (hidden - newgate)
-    #hy = newgate + inputgate
-    #return newgate
-    #output = gi[:,:128]
-
-    return hy
-    #return i_r + h_r
-    #return input_repeated
-    #return output
-
 
 def StackedRNN(inners, num_layers, lstm=False, dropout=0, train=True):
 
@@ -214,9 +136,6 @@ def Recurrent(inner, reverse=False):
         time.time()
         # pass
 
-    #@torch.compiler.disable
-    #@torch.jit.script
-    #@torch.jit.ignore
     def forward(input, hidden, weight, batch_sizes, input_quantizer, weight_quantizer):
         output = []        
         steps = range(input.size(0) - 1, -1, -1) if reverse else range(input.size(0))
@@ -224,9 +143,7 @@ def Recurrent(inner, reverse=False):
             hidden = inner(input[i], hidden, *weight,
                            input_quantizer=input_quantizer, weight_quantizer=weight_quantizer)
             # hack to handle LSTM
-            #torch._dynamo.graph_break()
             output.append(hidden[0] if isinstance(hidden, tuple) else hidden)
-            #_graph_break()
 
         if reverse:
             output.reverse()
@@ -235,13 +152,6 @@ def Recurrent(inner, reverse=False):
         return hidden, output
     
     def forward_(input, hidden, weight, batch_sizes, input_quantizer, weight_quantizer, reverse=False):
-        # Pad input along dim 0 to size 500 if necessary
-        '''seq_len = input.size(0)
-        pad_len = 500 - seq_len
-        # Pad at the end (i.e., after the last time step)
-        padding = (0,) * (input.dim() - 1) * 2 + (0, pad_len)
-        input = F.pad(input, padding)'''
-
         output = []
         steps = range(500 - 1, -1, -1) if reverse else range(500)
         for i in steps:
@@ -386,7 +296,6 @@ def AutogradRNN(mode, input_size, hidden_size, num_layers=1, batch_first=False,
         return output, nexth
 
     return forward
-
 
 def RNN(*args, **kwargs):
 

@@ -66,22 +66,11 @@ class HistogramCalibrator(_Calibrator):
 
     def collect(self, x):
         """Collect histogram"""
-        '''if torch.min(x) < 0.:
-            logging.log_first_n(
-                logging.INFO,
-                ("Calibrator encountered negative values. It shouldn't happen after ReLU. "
-                 "Make sure this is the right tensor to calibrate."),
-                1)
-            x = x.abs()'''
-
         x = x.float()
 
         if not self._torch_hist:
             x_np = x.cpu().detach().numpy()
             x_np = x_np[np.isfinite(x_np)]
-
-            '''if self._skip_zeros:
-                x_np = x_np[np.where(x_np != 0)]'''
 
             if self._calib_bin_edges is None and self._calib_hist is None:
                 # first time it uses num_bins to compute histogram.

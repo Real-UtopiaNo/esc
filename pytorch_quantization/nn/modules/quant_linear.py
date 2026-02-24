@@ -60,7 +60,6 @@ class QuantLinear(nn.Linear, _utils.QuantMixin):
     """
 
     default_quant_desc_input = tensor_quant.QUANT_DESC_8BIT_PER_TENSOR
-    #default_quant_desc_input = tensor_quant.QUANT_DESC_4BIT_PER_TENSOR #here to 4 bits, how to generalize it?
     default_quant_desc_weight = tensor_quant.QUANT_DESC_8BIT_LINEAR_WEIGHT_PER_ROW
 
     def __init__(self, in_features, out_features, bias=True, **kwargs):
@@ -74,14 +73,6 @@ class QuantLinear(nn.Linear, _utils.QuantMixin):
         quant_weight = self._weight_quantizer(self.weight)
 
         output = F.linear(quant_input, quant_weight, bias=self.bias)
-
-        #print('Linear')
-        #print(self._weight_quantizer.extra_repr())
-
-        num_unique_input = torch.unique(quant_input).numel()
-        num_unique_weight = torch.unique(quant_weight).numel()
-        num_unique_weight2 = torch.unique(self.weight).numel()
-        num_unique_output = torch.unique(output).numel()
 
         return output
 
@@ -126,10 +117,6 @@ class QuantMultiheadAttention(nn.MultiheadAttention, _utils.QuantMixin):
 
     def __init__(self, embed_dim, num_heads, dropout=0.0, **kwargs):
         super(QuantMultiheadAttention, self).__init__(embed_dim, num_heads, dropout=0.0)
-        #quant_desc_query, quant_desc_key, quant_desc_value, quant_desc_weight = _utils.pop_quant_desc_in_kwargs(self.__class__, **kwargs)
-
-        #self.init_quantizer(quant_desc_query, quant_desc_key, quant_desc_value, quant_desc_weight)
-
         quant_desc_input, quant_desc_weight = _utils.pop_quant_desc_in_kwargs(self.__class__, **kwargs)
 
         self.init_quantizer(quant_desc_input, quant_desc_weight)
@@ -141,14 +128,6 @@ class QuantMultiheadAttention(nn.MultiheadAttention, _utils.QuantMixin):
 
         quant_weight = self._weight_quantizer(self.in_proj_weight)
 
-        '''output_query, output_key = F.multi_head_attention_forward(
-                quant_query, quant_key, quant_value, self.embed_dim, self.num_heads,
-                self.in_proj_weight, self.in_proj_bias,
-                self.bias_k, self.bias_v, self.add_zero_attn,
-                self.dropout, self.out_proj.weight, self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=None, need_weights=True,
-                attn_mask=None)'''
         
         tgt_len, bsz, embed_dim = quant_query.size()
 
@@ -158,20 +137,13 @@ class QuantMultiheadAttention(nn.MultiheadAttention, _utils.QuantMixin):
         output = F.linear(query, self.in_proj_weight, self.in_proj_bias)
 
         split_size = output.size(2) // 3
-        #split_size = 64
         q = output[:,:,:split_size]
         k = output[:,:,split_size:2*split_size]
         v = output[:,:,2*split_size:]
 
-        #q = q.contiguous().view(tgt_len, bsz * self.num_heads, head_dim)
-        #q = q.contiguous().view(tgt_len, bsz, embed_dim)
-        #return q,q
-
         q = q.contiguous().view(tgt_len, bsz * self.num_heads, head_dim).transpose(0, 1)
         k = k.contiguous().view(tgt_len, bsz * self.num_heads, head_dim).transpose(0, 1)
         v = v.contiguous().view(tgt_len, bsz * self.num_heads, head_dim).transpose(0, 1)
-
-        #return q, q
 
         src_len = k.size(1)
 
@@ -185,34 +157,6 @@ class QuantMultiheadAttention(nn.MultiheadAttention, _utils.QuantMixin):
         attn_output = F.linear(attn_output, self.out_proj.weight, self.out_proj.bias)
 
         return attn_output, attn_output_weights
-
-        #return output, output
-
-        '''output_query = F.multi_head_attention_forward_minimal(
-                quant_query, quant_key, quant_value, self.embed_dim, self.num_heads,
-                self.in_proj_weight, self.in_proj_bias,
-                self.bias_k, self.bias_v, self.add_zero_attn,
-                self.dropout, self.out_proj.weight, self.out_proj.bias,
-                training=self.training,
-                key_padding_mask=None, need_weights=True,
-                attn_mask=None)
-
-        #return quant_query, quant_key
-        return output_query, output_query'''
-
-        
-
-        '''output = F.linear(quant_input, quant_weight, bias=self.bias)
-
-        #print('Linear')
-        #print(self._weight_quantizer.extra_repr())
-
-        num_unique_input = torch.unique(quant_input).numel()
-        num_unique_weight = torch.unique(quant_weight).numel()
-        num_unique_weight2 = torch.unique(self.weight).numel()
-        num_unique_output = torch.unique(output).numel()
-
-        return output'''
 
 MultiheadAttention = QuantMultiheadAttention
 
@@ -243,17 +187,6 @@ class floor_ste(Function):
     def backward(ctx, grad_output):
         return grad_output.clone()
 
-
-'''QUANT_DESC_8BIT_PER_TENSOR = QuantDescriptor(num_bits=8)
-QUANT_DESC_UNSIGNED_8BIT_PER_TENSOR = QuantDescriptor(num_bits=8, unsigned=True)
-QUANT_DESC_8BIT_CONV1D_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_CONV2D_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_CONV3D_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_LINEAR_WEIGHT_PER_ROW = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_CONVTRANSPOSE1D_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_CONVTRANSPOSE2D_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_CONVTRANSPOSE3D_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))
-QUANT_DESC_8BIT_INSTANCENORM_WEIGHT_PER_CHANNEL = QuantDescriptor(num_bits=8, axis=(0))'''
 
 class QuantLayerNorm(nn.LayerNorm, _utils.QuantMixin):
     """Quantized version of nn.Linear
@@ -287,7 +220,6 @@ class QuantLayerNorm(nn.LayerNorm, _utils.QuantMixin):
     """
 
     default_quant_desc_input = tensor_quant.QUANT_DESC_8BIT_PER_TENSOR
-    #default_quant_desc_weight = tensor_quant.QUANT_DESC_8BIT_LINEAR_WEIGHT_PER_ROW #worked befire
     default_quant_desc_weight = tensor_quant.QUANT_DESC_8BIT_PER_TENSOR
 
     def __init__(self, normalized_shape, **kwargs):
@@ -309,69 +241,14 @@ class QuantLayerNorm(nn.LayerNorm, _utils.QuantMixin):
         var = quant_input.var(dim=dims, keepdim=True, unbiased=False)  # match C++ default
         normalized = (quant_input - mean) / torch.sqrt(var + self.eps)
 
-        #return normalized
 
-        #weight = self.weight.view(*([1] * (quant_input.dim() - len(self.normalized_shape))), *self.normalized_shape)
         weight = quant_weight.view(*([1] * (quant_input.dim() - len(self.normalized_shape))), *self.normalized_shape)
         normalized = normalized * weight
-
-        #return normalized
 
         bias = self.bias.view(*([1] * (quant_input.dim() - len(self.normalized_shape))), *self.normalized_shape)
         normalized = normalized + bias
 
         return normalized
-    
-        '''def forward(self, input):
-        quant_input = self._input_quantizer(input)
-        quant_weight = self._weight_quantizer(self.weight)
-
-        dims = tuple(range(-len(self.normalized_shape), 0))  # e.g., (-1,) for last dim
-
-        mean = quant_input.mean(dim=dims, keepdim=True)
-        var = quant_input.var(dim=dims, keepdim=True, unbiased=False)  # match C++ default
-        normalized = (quant_input - mean) / torch.sqrt(var + self.eps)
-
-        weight = quant_weight.view(*([1] * (quant_input.dim() - len(self.normalized_shape))), *self.normalized_shape)
-        normalized = normalized * weight
-
-        bias = self.bias.view(*([1] * (quant_input.dim() - len(self.normalized_shape))), *self.normalized_shape)
-        normalized = normalized + bias
-
-        return normalized'''
-
-
-        #output = quant_input
-
-        #output = F.layer_norm(quant_input, self.normalized_shape, quant_weight, self.bias, self.eps)
-
-        # Normalization: computes mean and variance(std)
-        '''x_int = quant_input
-        mean_int = x_int.mean(axis=2, keepdim=True)
-        y_int = x_int - mean_int
-        y_sq_int = y_int ** 2
-        var_int = torch.sum(y_sq_int, axis=2, keepdim=True)
-
-        # Integer Iteration
-        k = 2 ** 16
-        for _ in range(10):
-            k_1 = (k + var_int/k)/2
-            k = k_1
-        std_int = k
-
-        factor = (2 ** 31-1) / std_int
-        y_int = y_int * factor / 2
-
-        y_int = y_int + self.bias
-        x = y_int * quant_weight
-
-        return x'''
-
-
-        #print('Linear')
-        #print(self._weight_quantizer.extra_repr())
-
-        #return output
 
 LayerNorm = QuantLayerNorm
 
@@ -476,8 +353,6 @@ class QuantLoRA(nn.Module, _utils.QuantMixin):
     def forward(self, input):
         quant_input = self._input_quantizer(input)
         quant_weight = self._weight_quantizer(self.quant_weight)
-        #right_weight = self._weight_quantizer(self.right_weight)
-        #left_weight = self._weight_quantizer(self.left_weight)
 
         HX = F.linear(quant_input, quant_weight)
         right_output = F.linear(quant_input, self.right_weight)
