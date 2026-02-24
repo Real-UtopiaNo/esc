@@ -59,3 +59,16 @@ def set_calibrators(model):
     for name, module in model.model.named_modules():
         if hasattr(module, "input_quantizer"):
             module.input_quantizer._calibrator = calib.HistogramCalibrator(num_bits=module.input_quantizer._num_bits, axis=module.input_quantizer._axis, unsigned=module.input_quantizer._unsigned)
+
+def set_scale(model, scale_list):
+    i = 0
+    for name, module in model.model.named_modules():
+        if hasattr(module, "input_quantizer"):
+            module.input_quantizer.amax = scale_list[i]
+            i += 1
+
+def objective_function(model, theta, list_amax):
+    scale_list = [x * y for x, y in zip(theta, list_amax)]
+    set_scale(model, scale_list)
+    metric = model.objective_function()
+    return metric

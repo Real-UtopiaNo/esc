@@ -2,11 +2,12 @@ from models import init_model
 from ptq import init_ptq
 from pytorch_quantization import quant_modules
 import pytorch_quantization
-from utils.quant_utils import calibrate_model, set_bits, set_calibrators
+from utils.quant_utils import calibrate_model, set_bits, set_calibrators, set_scale, objective_function
 from utils import init_logger
 import argparse
 import logging
 import pickle
+import cma
 
 logger = logging.getLogger("my_app")
 
@@ -63,6 +64,24 @@ def get_args():
         type=str,
         default=None,
         help="Path to precompute scale (default: None)",
+    )
+    #esc
+    parser.add_argument(
+        "--esc",
+        action="store_true",
+        help="If we use esc global optimization",
+    )
+    parser.add_argument(
+        "--sigma",
+        type=float,
+        default=0.1,
+        help="Sigma initial value (default: 0.1)",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=int,
+        default=100,
+        help="Number of evaluation function evaluated (default: 100)",
     )
     #adaround
     parser.add_argument(
@@ -223,6 +242,43 @@ if __name__ == "__main__":
     # model_ptq.evaluate()
 
     # assert False
+
+    if args.esc:
+        logger.info('ESC global optimization starts')
+        assert args.calib == "mse" or mse in args.precompute_scale, "MSE initialization should be use to fully use the paper described method, you could bypass this warning by commenting"
+
+        list_amax = []
+        for name, module in model_ptq.model.named_modules():
+            if hasattr(module, "input_quantizer"):
+                list_amax.append(module.input_quantizer.amax.item())
+        
+        es = cma.CMAEvolutionStrategy(
+                x0=[1]* len(list_amax), #list_amax
+                sigma0=args.sigma,
+            )
+
+        es.opts.set({'maxfevals': args.gamma})
+
+        while not es.stop():
+            solutions = es.ask()
+            train_losses = [objective_function(model_ptq, x, list_amax) for x in solutions]
+            es.tell(solutions, train_losses)
+            es.disp()
+
+        best = es.result.xfavorite
+        scale_list = [x * y for x, y in zip(best, list_amax)]
+        set_scale(model, scale_list)
+        
+        model_ptq.evaluate()
+
+            # dict_amax_esc = {}
+
+            # for name, module in model_ptq.model.named_modules():
+            #     if hasattr(module, "input_quantizer"):
+            #         dict_amax_esc[name] = module.input_quantizer.amax
+            
+            # with open(f"scale/dict_amax_{model_name}_{num_bits}_esc_{sigma:.3f}_{j}.pkl", "wb") as f:
+            #     pickle.dump(dict_amax_esc, f)
 
     if ptq == "adaround":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantConv1d, pytorch_quantization.nn.QuantConv2d, pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
