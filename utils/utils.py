@@ -29,7 +29,7 @@ def init_logger(args):
     elif args.ptq == "smoothquant":
         log_filename = f"logs/{args.ptq}/{args.model}_{args.ptq}_{args.num_bits}_{args.alpha_smoothquant}_{calib_suffix}.log"
     else:
-        log_filename = f"logs/{args.ptq}/{args.model}_{args.ptq}_{args.num_bits}_{calib_suffix}.log"
+        log_filename = f"logs/{args.model}_{args.num_bits}_{calib_suffix}.log"
     file_handler = logging.FileHandler(log_filename, mode='w')
 
     formatter = logging.Formatter(
