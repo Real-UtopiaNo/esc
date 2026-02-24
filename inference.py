@@ -220,10 +220,9 @@ if __name__ == "__main__":
                     list_amax.append(dict_amax[name].item())
     
     # logger.info('Evaluation before PTQ')
-    model_ptq.evaluate()
+    # model_ptq.evaluate()
 
-    assert False
-
+    # assert False
 
     if ptq == "adaround":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantConv1d, pytorch_quantization.nn.QuantConv2d, pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
@@ -259,4 +258,4 @@ if __name__ == "__main__":
         model = init_ptq(model_ptq.model, ptq, layers_input=layers_input)
     
     logger.info('Evaluation after PTQ')
-    model_ptq.evaluate()
+    #model_ptq.evaluate()
