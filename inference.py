@@ -2,11 +2,12 @@ from models import init_model
 from ptq import init_ptq
 from pytorch_quantization import quant_modules
 import pytorch_quantization
-from utils.quant_utils import calibrate_model, set_bits, set_calibrators, set_scale, objective_function
+from utils.quant_utils import calibrate_model, set_bits, set_calibrators, set_scale, save_scale, objective_function
 from utils import init_logger
 import argparse
 import logging
 import pickle
+import os
 import cma
 
 logger = logging.getLogger("my_app")
@@ -64,6 +65,16 @@ def get_args():
         type=str,
         default=None,
         help="Path to precompute scale (default: None)",
+    )
+    parser.add_argument(
+        "--fp32_eval",
+        action="store_true",
+        help="If we evaluate FP32 model",
+    )
+    parser.add_argument(
+        "--calib_eval",
+        action="store_true",
+        help="If we evaluate calibrated (pre-ESC) INT model",
     )
     parser.add_argument(
         "--export",
@@ -184,18 +195,17 @@ if __name__ == "__main__":
     num_train_data = args.num_train_data
 
     #Evaluation FP32
-    model_ptq = init_model(model_name)
-    model_ptq.load()
-    #model_ptq.evaluate()
-    #print(model_ptq.model)
+    if args.fp32_eval:
+        model_ptq = init_model(model_name)
+        model_ptq.load()
+        model_ptq.evaluate()
+        model_ptq.benchmark(mode="fp32")
 
     #Evaluation INT8 without calibration
     quant_modules.initialize()
     model_ptq = init_model(model_name)
     model_ptq.load()
     set_bits(model_ptq, num_bits)
-
-    #model_ptq.evaluate()
 
     model_ptq.pre_calibration(ptq)
 
@@ -207,6 +217,11 @@ if __name__ == "__main__":
             num_calib_batch=args.num_calib_data, #100
             method=args.calib,
             percentile=args.percentile) #usually max
+        
+        path = f"scale/{model_name}_b{num_bits}_{args.calib}.pkl"
+        if not os.path.exists(path):
+            save_scale(model_ptq, path)
+        
     elif ptq == "smoothquant":
         calibrate_model(
             model_ptq=model_ptq,
@@ -243,10 +258,9 @@ if __name__ == "__main__":
                     module.input_quantizer.amax = dict_amax[name].item()
                     list_amax.append(dict_amax[name].item())
     
-    # logger.info('Evaluation before PTQ')
-    # model_ptq.evaluate()
-
-    # assert False
+    if args.calib_eval or ptq is None:
+        logger.info('Evaluation after calibration')
+        model_ptq.evaluate()
 
     if args.esc:
         logger.info('ESC global optimization starts')
@@ -258,7 +272,7 @@ if __name__ == "__main__":
                 list_amax.append(module.input_quantizer.amax.item())
         
         es = cma.CMAEvolutionStrategy(
-                x0=[1]* len(list_amax), #list_amax
+                x0=[1]* len(list_amax),
                 sigma0=args.sigma,
             )
 
@@ -272,22 +286,18 @@ if __name__ == "__main__":
 
         best = es.result.xfavorite
         scale_list = [x * y for x, y in zip(best, list_amax)]
-        set_scale(model, scale_list)
+        set_scale(model_ptq, scale_list)
         
+        logger.info('Evaluation after ESC')
         model_ptq.evaluate()
 
-            # dict_amax_esc = {}
-
-            # for name, module in model_ptq.model.named_modules():
-            #     if hasattr(module, "input_quantizer"):
-            #         dict_amax_esc[name] = module.input_quantizer.amax
-            
-            # with open(f"scale/dict_amax_{model_name}_{num_bits}_esc_{sigma:.3f}_{j}.pkl", "wb") as f:
-            #     pickle.dump(dict_amax_esc, f)
+        path = f"scale/{model_name}_b{num_bits}_esc.pkl"
+        if not os.path.exists(path):
+            save_scale(model_ptq, path)
     
     if ptq == "adaround":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantConv1d, pytorch_quantization.nn.QuantConv2d, pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
-        model = init_ptq(model_ptq.model, ptq, layers_input=layers_input, max_iter=args.iter_adaround) #put max iter = 10k
+        model = init_ptq(model_ptq.model, ptq, layers_input=layers_input, max_iter=args.iter_adaround)
     elif ptq == "noisyquant":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
         model = init_ptq(model_ptq.model, ptq, layers_input=layers_input, search_space_mean=args.search_space_mean_noisyquant, search_space_range=args.search_space_range_noisyquant)
@@ -318,8 +328,9 @@ if __name__ == "__main__":
         layers_input = model_ptq.collect_layer_inputs(ptq, layers_to_quantize=[pytorch_quantization.nn.QuantLinear], num_batches = num_train_data)
         model = init_ptq(model_ptq.model, ptq, layers_input=layers_input)
     
-    logger.info('Evaluation after PTQ')
-    #model_ptq.evaluate()
+    if ptq is not None:
+        logger.info('Evaluation after PTQ')
+        model_ptq.evaluate()
 
     if args.export:
         model_ptq.export()

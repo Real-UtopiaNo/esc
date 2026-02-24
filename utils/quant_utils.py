@@ -1,6 +1,7 @@
 import torch
 from pytorch_quantization import nn as quant_nn
 from pytorch_quantization import calib
+import pickle
 
 def compute_amax(model, **kwargs):
     # Load calib result
@@ -66,6 +67,15 @@ def set_scale(model, scale_list):
         if hasattr(module, "input_quantizer"):
             module.input_quantizer.amax = scale_list[i]
             i += 1
+
+def save_scale(model, path):
+    dict_amax = {}
+    for name, module in model.model.named_modules():
+        if hasattr(module, "input_quantizer"):
+            dict_amax[name] = module.input_quantizer.amax
+    
+    with open(path, "wb") as f:
+        pickle.dump(dict_amax, f)
 
 def objective_function(model, theta, list_amax):
     scale_list = [x * y for x, y in zip(theta, list_amax)]
