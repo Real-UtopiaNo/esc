@@ -1,5 +1,5 @@
 ## Evolution Strategy–Based Calibration for Low-Bit Quantization of Speech Models
-The official implementation of our paper: Evolution Strategy–Based Calibration for Low-Bit Quantization of Speech Models
+The official implementation of our paper: Evolution Strategy–Based Calibration for Low-Bit Quantization of Speech Models. The paper is the file esc.pdf
 
 #### Abstract
 *Quantization has become essential for the efficient deployment of speech processing systems. Although widely studied, most existing quantization methods were developed for vision and NLP architectures, while the specific challenges of audio signals remain largely overlooked. In particular, we show that audio activations can exhibit large calibration ranges, leading to significant information loss when standard calibration techniques are applied.
