@@ -42,10 +42,11 @@ batch_size = 2
 num_workers = 4
 num_gpus = 0
 
-ckpt_path = "checkpoints/mpnet.ckpt"
+ckpt_path = "checkpoints/MP-SENet_interspeech2023/g_best"
 training_path = "dataset/VoiceBank+DEMAND/training.txt"
-input_clean_wavs_dir = "dataset/VoiceBank+DEMAND/wavs_clean/wav_clean"
-input_noisy_wavs_dir = "dataset/VoiceBank+DEMAND/wavs_noisy/wav_noisy"
+test_path = "dataset/VoiceBank+DEMAND/test.txt"
+input_clean_wavs_dir = "dataset/VoiceBank+DEMAND/wavs_clean"
+input_noisy_wavs_dir = "dataset/VoiceBank+DEMAND/wavs_noisy"
 
 component=2
 channels=201
@@ -118,8 +119,8 @@ class MPNetModel(BaseModel):
         self.init_dataloader()
         a = 1
     
-    def evaluate(self, input_dir="dataset/VoiceBank+DEMAND/noisy_testset_wav/", output_dir="garbage"):        
-        test_indexes = os.listdir(input_dir)
+    def evaluate(self, input_dir=input_noisy_wavs_dir, output_dir="garbage"):        
+        test_indexes = [index + ".wav" for index in get_dataset_filelist(test_path)]
         os.makedirs(output_dir, exist_ok=True)
 
         with torch.no_grad():

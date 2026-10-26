@@ -3,6 +3,17 @@ import logging
 import os
 import torch_tensorrt
 
+def block_quant_tag(args):
+    """Run name for block-quantization logs and scale files, e.g. nvfp4_all or int4_block_gemm_dyntensor."""
+    return (f"{args.quant_format}_{args.coverage}" + ("_wonly" if args.weight_only else "")
+            + ("_dyntensor" if args.act_dynamic_tensor else ""))
+
+def int_quant_suffix(args):
+    return (("_gemm" if args.coverage == "gemm" else "")
+            + ("_wonly" if args.weight_only else "")
+            + ("_dyntoken" if args.act_dynamic_token else "")
+            + ("_dyntensor" if args.act_dynamic_tensor else ""))
+
 def init_logger(args):
     logger = logging.getLogger("my_app")
     logger.setLevel(logging.INFO)
@@ -16,7 +27,11 @@ def init_logger(args):
         calib_suffix = args.calib
 
     # File handler
-    if args.ptq == "adaround":
+    if args.fp32_only:
+        log_filename = f"logs/{args.model}_fp32.log"
+    elif args.quant_format != "int":
+        log_filename = f"logs/{args.quant_format}/{args.model}_{block_quant_tag(args)}.log"
+    elif args.ptq == "adaround":
         log_filename = f"logs/{args.ptq}/{args.model}_{args.ptq}_{args.num_bits}_{args.iter_adaround}_{calib_suffix}.log"
     elif args.ptq == "noisyquant":
         log_filename = f"logs/{args.ptq}/{args.model}_{args.ptq}_{args.num_bits}_{args.search_space_mean_noisyquant}_{args.search_space_range_noisyquant}_{calib_suffix}.log"
@@ -29,7 +44,8 @@ def init_logger(args):
     elif args.ptq == "smoothquant":
         log_filename = f"logs/{args.ptq}/{args.model}_{args.ptq}_{args.num_bits}_{args.alpha_smoothquant}_{calib_suffix}.log"
     else:
-        log_filename = f"logs/{args.model}_{args.num_bits}_{calib_suffix}.log"
+        log_filename = f"logs/{args.model}_{args.num_bits}_{calib_suffix}{int_quant_suffix(args)}.log"
+    os.makedirs(os.path.dirname(log_filename), exist_ok=True)
     file_handler = logging.FileHandler(log_filename, mode='w')
 
     formatter = logging.Formatter(

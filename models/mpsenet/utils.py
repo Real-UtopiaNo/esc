@@ -127,7 +127,8 @@ def load_checkpoint(filepath, device):
     print("Loading '{}'".format(filepath))
     state_dict = torch.load(filepath, map_location=device)
     new_state_dict = {}
-    odict = state_dict['state_dict']
+    # Official MP-SENet checkpoints store the weights under 'generator'
+    odict = state_dict['state_dict'] if 'state_dict' in state_dict else state_dict['generator']
 
     new_odict = OrderedDict()
 

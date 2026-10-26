@@ -2,12 +2,15 @@ from models import init_model
 from ptq import init_ptq
 from pytorch_quantization import quant_modules
 import pytorch_quantization
-from utils.quant_utils import calibrate_model, set_bits, set_calibrators, set_scale, save_scale, objective_function
-from utils import init_logger
+from utils.quant_utils import (calibrate_model, set_bits, set_calibrators, set_scale, save_scale, objective_function,
+                               set_block_quant, set_dynamic_tensor_act, set_dynamic_token_act, set_gemm_only,
+                               set_weight_only)
+from utils import init_logger, block_quant_tag, int_quant_suffix
 import argparse
 import logging
 import pickle
 import os
+import sys
 import cma
 
 logger = logging.getLogger("my_app")
@@ -49,6 +52,38 @@ def get_args():
         help="Number of bits for quantization (default: 8)",
     )
     parser.add_argument(
+        "--quant_format",
+        type=str,
+        default="int",
+        choices=["int", "nvfp4", "int4_block", "hif4"],
+        help="int: uniform integer quantization of --num_bits; nvfp4: E2M1 + E4M3/16 + FP32 global; "
+             "int4_block: nvfp4 scales with INT4 elements; hif4: HiFloat4 (S1P2 + E6M2/E1/E1, block 64)",
+    )
+    parser.add_argument(
+        "--coverage",
+        type=str,
+        default="all",
+        choices=["all", "gemm"],
+        help="Layers to quantize: all quantized layers, or only GEMM layers (Linear, pointwise/dense conv). "
+             "Applies to int, nvfp4 and int4_block",
+    )
+    parser.add_argument(
+        "--act_dynamic_token",
+        action="store_true",
+        help="int format: quantize activations with one scale per time frame computed at run time",
+    )
+    parser.add_argument(
+        "--act_dynamic_tensor",
+        action="store_true",
+        help="Take the per-tensor activation amax from each input at run time instead of calibration "
+             "(int / nvfp4 / int4_block)",
+    )
+    parser.add_argument(
+        "--weight_only",
+        action="store_true",
+        help="Quantize weights only, keep activations in full precision",
+    )
+    parser.add_argument(
         "--num_calib_data",
         type=int,
         default=100,
@@ -70,6 +105,11 @@ def get_args():
         "--fp32_eval",
         action="store_true",
         help="If we evaluate FP32 model",
+    )
+    parser.add_argument(
+        "--fp32_only",
+        action="store_true",
+        help="Only evaluate the FP32 model, skip quantization",
     )
     parser.add_argument(
         "--calib_eval",
@@ -182,7 +222,22 @@ def get_args():
         default=0.5, #1000
         help="alpha for smoothquant optimization (default: 0.5)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.quant_format != "int" and (args.calib != "max" or args.ptq or args.precompute_scale or args.esc):
+        parser.error(f"--quant_format {args.quant_format} only supports --calib max without --ptq, --precompute_scale or --esc")
+    if args.act_dynamic_token and (args.quant_format != "int" or args.calib != "max" or args.weight_only
+                                   or args.ptq or args.precompute_scale or args.esc):
+        parser.error("--act_dynamic_token needs --quant_format int and --calib max (weights only), "
+                     "without --weight_only, --ptq, --precompute_scale or --esc")
+    if args.act_dynamic_tensor and (args.weight_only or args.act_dynamic_token or args.ptq
+                                    or args.precompute_scale or args.esc or args.calib != "max"):
+        parser.error("--act_dynamic_tensor needs --calib max, without --weight_only, --act_dynamic_token, "
+                     "--ptq, --precompute_scale or --esc")
+    if args.coverage == "gemm" and args.quant_format == "int" and args.esc:
+        parser.error("--coverage gemm with --quant_format int cannot be combined with --esc")
+    if args.weight_only and args.esc:
+        parser.error("--esc searches activation scales and cannot be combined with --weight_only")
+    return args
 
 if __name__ == "__main__":
     args = get_args()
@@ -195,23 +250,41 @@ if __name__ == "__main__":
     num_train_data = args.num_train_data
 
     #Evaluation FP32
-    if args.fp32_eval:
+    if args.fp32_eval or args.fp32_only:
         model_ptq = init_model(model_name)
         model_ptq.load()
         model_ptq.evaluate()
         model_ptq.benchmark(mode="fp32")
+    if args.fp32_only:
+        sys.exit(0)
 
     #Evaluation INT8 without calibration
     quant_modules.initialize()
     model_ptq = init_model(model_name)
     model_ptq.load()
     set_bits(model_ptq, num_bits)
+    if args.quant_format != "int":
+        element = {"nvfp4": "e2m1", "int4_block": "int4", "hif4": "hif4"}[args.quant_format]
+        set_block_quant(model_ptq, args.coverage, element)
+    elif args.coverage == "gemm":
+        set_gemm_only(model_ptq)
+    if args.act_dynamic_tensor:
+        set_dynamic_tensor_act(model_ptq)
+    if args.act_dynamic_token:
+        set_dynamic_token_act(model_ptq)
+    if args.weight_only:
+        set_weight_only(model_ptq)
 
     model_ptq.pre_calibration(ptq)
 
     logger.info('Calibration start')
-    if args.precompute_scale is None:
-        set_calibrators(model_ptq)
+    if args.quant_format == "hif4":
+        # HiF4 scales are fully dynamic (E6M2/E1/E1 from each tensor); no static amax.
+        logger.info('HiF4: skipping static calibration')
+    elif args.precompute_scale is None:
+        # HistogramCalibrator has no "max" method; keep the default MaxCalibrator for it
+        if args.calib != "max":
+            set_calibrators(model_ptq)
         calibrate_model(
             model_ptq=model_ptq,
             model_name=model_name,
@@ -219,7 +292,10 @@ if __name__ == "__main__":
             method=args.calib,
             percentile=args.percentile) #usually max
         
-        path = f"scale/{model_name}_b{num_bits}_{args.calib}.pkl"
+        if args.quant_format != "int":
+            path = f"scale/{model_name}_{block_quant_tag(args)}_{args.calib}.pkl"
+        else:
+            path = f"scale/{model_name}_b{num_bits}_{args.calib}{int_quant_suffix(args)}.pkl"
         if not os.path.exists(path):
             save_scale(model_ptq, path)
         

@@ -456,3 +456,160 @@ class FakeAffineTensorQuantFunction(Function):
 tensor_quant = TensorQuantFunction.apply
 fake_tensor_quant = FakeTensorQuantFunction.apply
 fake_affine_tensor_quant = FakeAffineTensorQuantFunction.apply
+
+E2M1_MAX = 6.0
+E4M3_MAX = 448.0
+_E2M1_BOUNDS = [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0]
+_E2M1_VALUES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+# Midpoints whose upper neighbour has an even mantissa; ties there round up
+_E2M1_TIES_UP = [0.75, 1.75, 3.5]
+
+
+def _round_to_e2m1(x):
+    """Round magnitudes to the E2M1 grid with round-half-to-even, saturating at 6."""
+    mag = x.abs()
+    bounds = torch.tensor(_E2M1_BOUNDS, device=x.device, dtype=mag.dtype)
+    idx = torch.searchsorted(bounds, mag)
+    ties_up = torch.tensor(_E2M1_TIES_UP, device=x.device, dtype=mag.dtype)
+    idx = idx + torch.isin(mag, ties_up).long()
+    values = torch.tensor(_E2M1_VALUES, device=x.device, dtype=mag.dtype)
+    return torch.sign(x) * values[idx]
+
+
+def _round_to_int4(x):
+    """Round to the INT4 grid [-8, 7] with round-half-to-even."""
+    return x.round().clamp(-8, 7)
+
+
+# element format -> (largest magnitude a block amax maps to, rounding function)
+BLOCK_ELEMENTS = {
+    "e2m1": (E2M1_MAX, _round_to_e2m1),
+    "int4": (7.0, _round_to_int4),
+}
+
+
+def fake_block_quant(inputs, global_amax, element="e2m1", block_axis=-1, block_size=16):
+    """NVFP4-style two-level fake quantization: one E4M3 scale per block of `block_size`
+    elements along `block_axis` and an FP32 per-tensor scale derived from `global_amax`.
+    `element` picks the 4-bit element grid: "e2m1" (NVFP4) or "int4".
+
+    block_axis=None blocks along all dims after dim 0 flattened together (the GEMM reduction
+    dim of a conv weight). A partial last block is zero-padded.
+    """
+    if block_axis is None:
+        return fake_block_quant(inputs.reshape(inputs.shape[0], -1), global_amax, element,
+                                block_size=block_size).reshape(inputs.shape)
+    if block_axis not in (-1, inputs.dim() - 1):
+        x = inputs.movedim(block_axis, -1)
+        return fake_block_quant(x, global_amax, element, block_size=block_size).movedim(-1, block_axis)
+
+    element_max, round_to_grid = BLOCK_ELEMENTS[element]
+    x = inputs.float()
+    global_scale = global_amax.float().to(x.device).reshape(()) / (element_max * E4M3_MAX)
+
+    length = x.shape[-1]
+    pad = -length % block_size
+    if pad:
+        x = torch.nn.functional.pad(x, (0, pad))
+
+    blocks = x.reshape(*x.shape[:-1], -1, block_size)
+    block_amax = blocks.abs().amax(dim=-1, keepdim=True)
+    block_scale = block_amax / (element_max * global_scale)
+    block_scale = torch.where(block_scale == 0, torch.ones_like(block_scale), block_scale)
+    block_scale = block_scale.clamp(min=2**-9, max=E4M3_MAX).to(torch.float8_e4m3fn).float()
+
+    scale = block_scale * global_scale
+    out = round_to_grid(blocks / scale) * scale
+    out = out.reshape(x.shape)[..., :length]
+    return out.to(inputs.dtype)
+
+
+def fake_nvfp4_quant(inputs, global_amax, block_axis=-1, block_size=16):
+    """NVFP4 fake quantization: E2M1 elements with E4M3 block scales, see fake_block_quant."""
+    return fake_block_quant(inputs, global_amax, "e2m1", block_axis, block_size)
+
+
+# ---- HiFloat4 (arXiv:2602.11287 Algorithm 1) ----
+HIF4_BLOCK = 64
+E6M2_QMIN = 2.0 ** -48
+E6M2_QMAX = 1.5 * (2.0 ** 15)  # max finite: 2^15 * 1.50
+S1P2_MAX = 1.75
+# Intra-group peak the hierarchy can represent: 2^(1+1) * 1.75 = 7
+HIF4_INTRAGROUP_MAX = 7.0
+
+
+def _to_e6m2(x):
+    """Unsigned E6M2 used by HiF4: X = 2^E * 1.M (no subnormals; NaN is 111111_11).
+
+    Mantissa field 11 (=1.75) is valid except at the max exponent, where it encodes NaN
+    and the max finite value is 1.50 * 2^15.
+    """
+    x = x.float().clamp(min=E6M2_QMIN, max=E6M2_QMAX)
+    e = torch.floor(torch.log2(x))
+    # Integer with 2 fraction bits of the significand: round(x / 2^(e-2)) ∈ {4,5,6,7}
+    m_int = torch.round(x / torch.pow(torch.tensor(2.0, device=x.device, dtype=x.dtype), e - 2))
+    overflow = m_int >= 8
+    e = torch.where(overflow, e + 1, e)
+    m_int = torch.where(overflow, torch.full_like(m_int, 4.0), m_int)
+    # Clamp to max finite E6M2
+    too_big = (e > 15) | ((e == 15) & (m_int > 6))
+    e = torch.where(too_big, torch.full_like(e, 15.0), e)
+    m_int = torch.where(too_big, torch.full_like(m_int, 6.0), m_int)
+    # Exponent 15 + mantissa 7 would be NaN encoding → clamp to 1.50
+    m_int = torch.where((e == 15) & (m_int >= 7), torch.full_like(m_int, 6.0), m_int)
+    return m_int * torch.pow(torch.tensor(2.0, device=x.device, dtype=x.dtype), e - 2)
+
+
+def _round_to_s1p2(x):
+    """Round to S1P2 / E1M2 grid with round-half-to-even, saturating at ±1.75."""
+    mag = x.abs().clamp(max=S1P2_MAX)
+    q = (mag / 0.25).round() * 0.25
+    return torch.sign(x) * q
+
+
+def fake_hif4_quant(inputs, block_axis=-1, block_size=HIF4_BLOCK):
+    """HiF4 fake quantization (arXiv:2602.11287): 64-element blocks with E6M2 / E1_8 / E1_16
+    hierarchical scales and S1P2 elements. All scales are computed from the tensor itself
+    (no per-tensor static amax).
+
+    block_axis=None flattens dims after dim 0 (conv weight reduction dim). Partial last
+    blocks are zero-padded.
+    """
+    if block_axis is None:
+        return fake_hif4_quant(inputs.reshape(inputs.shape[0], -1),
+                               block_size=block_size).reshape(inputs.shape)
+    if block_axis not in (-1, inputs.dim() - 1):
+        x = inputs.movedim(block_axis, -1)
+        return fake_hif4_quant(x, block_size=block_size).movedim(-1, block_axis)
+
+    x = inputs.float()
+    length = x.shape[-1]
+    pad = -length % block_size
+    if pad:
+        x = torch.nn.functional.pad(x, (0, pad))
+
+    blocks = x.reshape(*x.shape[:-1], -1, block_size)  # (..., B, 64)
+    abs_b = blocks.abs()
+    v16 = abs_b.reshape(*abs_b.shape[:-1], 16, 4).amax(dim=-1)       # (..., B, 16)
+    v8 = v16.reshape(*v16.shape[:-1], 8, 2).amax(dim=-1)             # (..., B, 8)
+    vmax = v8.amax(dim=-1, keepdim=True)                              # (..., B, 1)
+    zero = vmax == 0
+
+    sf = (vmax / HIF4_INTRAGROUP_MAX).clamp(min=E6M2_QMIN)
+    e6m2 = _to_e6m2(sf)
+    rec = torch.where(zero, torch.ones_like(e6m2), 1.0 / e6m2)
+
+    e1_8 = (v8 * rec >= 4).to(x.dtype)                                # (..., B, 8)
+    e1_8_for16 = e1_8.repeat_interleave(2, dim=-1)                    # (..., B, 16)
+    e1_16 = (v16 * rec * torch.pow(torch.tensor(2.0, device=x.device, dtype=x.dtype),
+                                   -e1_8_for16) >= 2).to(x.dtype)
+
+    e1_8_el = e1_8.repeat_interleave(8, dim=-1)                       # (..., B, 64)
+    e1_16_el = e1_16.repeat_interleave(4, dim=-1)
+    two = torch.tensor(2.0, device=x.device, dtype=x.dtype)
+    scaled = blocks * rec * torch.pow(two, -e1_8_el) * torch.pow(two, -e1_16_el)
+    s1p2 = _round_to_s1p2(scaled)
+    out = e6m2 * torch.pow(two, e1_8_el + e1_16_el) * s1p2
+    out = torch.where(zero, torch.zeros_like(out), out)
+    out = out.reshape(x.shape)[..., :length]
+    return out.to(inputs.dtype)

@@ -23,7 +23,8 @@ from absl import logging
 import torch
 from torch import nn
 
-from pytorch_quantization.tensor_quant import QuantDescriptor, tensor_quant, fake_tensor_quant
+from pytorch_quantization.tensor_quant import (
+    QuantDescriptor, tensor_quant, fake_tensor_quant, fake_block_quant, fake_hif4_quant)
 from pytorch_quantization.nn.modules.clip import Clip
 
 from pytorch_quantization import calib
@@ -89,6 +90,12 @@ class TensorQuantizer(nn.Module):
         self._if_calib_ptq = False
         self.ptq = None
 
+        self._quant_format = "int"
+        self._block_axis = -1
+        self._element = None
+        self._dynamic_amax = False
+        self._dynamic_reduce_dims = None
+
         if quant_desc.amax is not None:
             self.register_buffer('_amax', torch.tensor(quant_desc.amax))
 
@@ -150,6 +157,34 @@ class TensorQuantizer(nn.Module):
     @property
     def narrow_range(self):
         return self._narrow_range
+
+    def use_block_quant(self, block_axis=-1, element="e2m1"):
+        """Switch to two-level block fake quantization (element "e2m1" is NVFP4): 16-element
+        blocks along `block_axis` (None flattens all dims after dim 0) and a per-tensor global
+        amax, calibrated statically with max."""
+        self._quant_format = "block"
+        self._element = element
+        self._block_axis = block_axis
+        self._axis = None
+        self._calibrator = calib.MaxCalibrator(num_bits=self._num_bits, axis=None, unsigned=self._unsigned)
+
+    def use_hif4(self, block_axis=-1):
+        """Switch to HiF4 (arXiv:2602.11287): 64-element blocks with E6M2/E1/E1 scales and S1P2
+        elements. All scales are dynamic from the tensor; no static amax / calibrator."""
+        self._quant_format = "hif4"
+        self._element = "hif4"
+        self._block_axis = block_axis
+        self._axis = None
+        self._calibrator = None
+        self._dynamic_amax = False
+
+    def use_dynamic_amax(self, reduce_dims=None):
+        """Compute amax from each input at run time, reducing over `reduce_dims` only, so one
+        scale is shared by the elements left in those dims; None reduces over the whole tensor.
+        No calibration is needed."""
+        self._dynamic_amax = True
+        self._dynamic_reduce_dims = reduce_dims
+        self._calibrator = None
 
     def disable(self):
         """Bypass the module"""
@@ -278,7 +313,12 @@ class TensorQuantizer(nn.Module):
 
     def _get_amax(self, inputs):
         """get amax from buffer or compute it dynamically."""
-        if hasattr(self, '_amax'):
+        if self._dynamic_amax:
+            if self._dynamic_reduce_dims is None:
+                amax = inputs.detach().abs().max()
+            else:
+                amax = inputs.detach().abs().amax(dim=self._dynamic_reduce_dims, keepdim=True)
+        elif hasattr(self, '_amax'):
             amax = self._amax
         else:
             if self._axis is None:
@@ -343,11 +383,17 @@ class TensorQuantizer(nn.Module):
 
     def _quant_forward(self, inputs):
         """Quantized forward pass."""
+        if self._quant_format == "hif4":
+            return fake_hif4_quant(inputs, self._block_axis)
+
         if self._learn_amax:
             inputs = self.clip(inputs)
             amax = torch.max(-self.clip.clip_value_min, self.clip.clip_value_max).detach()
         else:
             amax = self._get_amax(inputs)
+
+        if self._quant_format == "block":
+            return fake_block_quant(inputs, amax, self._element, self._block_axis)
 
         if self._fake_quant:
             if not TensorQuantizer.use_fb_fake_quant:
@@ -421,7 +467,17 @@ class TensorQuantizer(nn.Module):
     def extra_repr(self):
         if self._disabled:
             return "disabled"
+        if self._dynamic_amax:
+            amax = "dynamic over dims {}".format(self._dynamic_reduce_dims if self._dynamic_reduce_dims is not None else "all")
+        else:
+            amax = self._short_amax()
+        if self._quant_format == "hif4":
+            return "hif4 block_axis={}".format(self._block_axis)
+        if self._quant_format == "block":
+            return "block16 {} block_axis={} amax={}".format(self._element, self._block_axis, amax)
         s = "{}{}bit".format("unsigned " if self._unsigned else "", self._num_bits)
+        if self._dynamic_amax:
+            s += " amax={}".format(amax)
         s += " narrow" if (self._narrow_range) else ""
         s += " fake" if (self._fake_quant) else ""
         s += " axis={}".format(self._axis) if self._axis is not None else " per-tensor"

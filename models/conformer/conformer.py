@@ -27,7 +27,7 @@ logger = logging.getLogger("my_app")
 
 ckpt_path = "checkpoints/conformer.ckpt"
 token_path = "dataset/conformer/tokens.txt"
-data_path = "dataset/conformer/LJSpeech"
+data_path = "/data/librispeech"
 
 compile_spec_encoder_conv = {"inputs": [torch_tensorrt.Input([1, 734, 80])],
                 "enabled_precisions": {torch.int8},
