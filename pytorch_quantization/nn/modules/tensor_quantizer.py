@@ -24,7 +24,8 @@ import torch
 from torch import nn
 
 from pytorch_quantization.tensor_quant import (
-    QuantDescriptor, tensor_quant, fake_tensor_quant, fake_block_quant, fake_hif4_quant)
+    QuantDescriptor, tensor_quant, fake_tensor_quant, fake_block_quant, fake_hif4_quant,
+    fake_hif8_quant)
 from pytorch_quantization.nn.modules.clip import Clip
 
 from pytorch_quantization import calib
@@ -174,6 +175,16 @@ class TensorQuantizer(nn.Module):
         self._quant_format = "hif4"
         self._element = "hif4"
         self._block_axis = block_axis
+        self._axis = None
+        self._calibrator = None
+        self._dynamic_amax = False
+
+    def use_hif8(self):
+        """Switch to HiF8 cast (arXiv:2409.16626): per-element HiFloat8 with TA rounding.
+        No per-tensor PTS scaling and no static amax / calibrator."""
+        self._quant_format = "hif8"
+        self._element = "hif8"
+        self._block_axis = -1
         self._axis = None
         self._calibrator = None
         self._dynamic_amax = False
@@ -386,6 +397,9 @@ class TensorQuantizer(nn.Module):
         if self._quant_format == "hif4":
             return fake_hif4_quant(inputs, self._block_axis)
 
+        if self._quant_format == "hif8":
+            return fake_hif8_quant(inputs)
+
         if self._learn_amax:
             inputs = self.clip(inputs)
             amax = torch.max(-self.clip.clip_value_min, self.clip.clip_value_max).detach()
@@ -473,6 +487,8 @@ class TensorQuantizer(nn.Module):
             amax = self._short_amax()
         if self._quant_format == "hif4":
             return "hif4 block_axis={}".format(self._block_axis)
+        if self._quant_format == "hif8":
+            return "hif8 cast TA"
         if self._quant_format == "block":
             return "block16 {} block_axis={} amax={}".format(self._element, self._block_axis, amax)
         s = "{}{}bit".format("unsigned " if self._unsigned else "", self._num_bits)

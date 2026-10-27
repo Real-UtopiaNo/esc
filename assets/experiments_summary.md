@@ -19,6 +19,7 @@
 9. **普通 INT4 上，激活动态 per-tensor 几乎无用。** 权重仍 per-channel Max 时，激活从静态逐张量改成动态逐张量，全部层 WER 145→127，只量化 GEMM 层仍有 96.8；远差于动态 per-frame（全部层 53.1 / 仅 GEMM 38.3）和块缩放（~19）。
 10. **ESC 静态 scale 可以优于朴素的动态 per-frame（全部层）。** ESC 全部层 38.29，动态 per-frame 全部层 53.10；但动态 per-frame 只量化 GEMM 时为 38.27，与 ESC 几乎持平。说明 ESC 搜到的是「对任务友好的截断」，而全部层上的 per-frame Max 仍会量化有害的非 GEMM 层，且对每帧取 max 未必最优。
 11. **HiF4（arXiv:2602.11287）在本模型上略优于 NVFP4。** 全部层 WER 18.90 vs 21.92；仅 GEMM 16.91 vs 17.15（更接近 FP32 15.94）。HiF4 无需静态全局校准，三级 scale 全动态。
+12. **HiF8 Cast（arXiv:2409.16626，无 PTS）接近 FP32。** 全部层 WER **16.34 / 4.96**，仅 GEMM **16.03 / 4.86**（FP32 为 15.94 / 4.84）。这是 8-bit 元素直接 TA cast，不是 HiF4 那种 4-bit 块浮点。
 
 ---
 
@@ -336,7 +337,24 @@ NVFP4 和论文的 INT4 同时在 4 个方面不同：元素格式（E2M1 对 IN
 
 ---
 
-## 9. 局限
+## 9. Conformer HiFloat8 Cast（W8A8，无 PTS）
+
+依据 [arXiv:2409.16626](https://arxiv.org/abs/2409.16626) 的 **HiF8 元素格式** + 前向 **round-half-away-from-zero（TA）** 做伪量化；**不做**论文 Algorithm 1 的 per-tensor 幂次缩放（PTS），即 HiF8_Cast。
+
+- 每元素独立 cast 到 HiF8 网格再反量化；无块 scale、无全局 amax、无校准
+- CLI：`--quant_format hif8 --coverage {all,gemm}`
+- 实现：`fake_hif8_quant` / `use_hif8`；单测 `tests/test_hif8.py`（含「冲刷到 0 的负数不得写成 0x80/NaN」）
+
+| 覆盖 | HiF8 Cast WER / CER | HiF4 | NVFP4 | FP32 |
+|---|---:|---:|---:|---:|
+| 全部层 | **16.34 / 4.96** | 18.90 / 5.71 | 21.92 / 6.82 | 15.94 / 4.84 |
+| 只量化 GEMM | **16.03 / 4.86** | 16.91 / 5.09 | 17.15 / 5.19 | 15.94 / 4.84 |
+
+相对 FP32，全部层约 +0.40 WER，GEMM-only 约 +0.09 WER；明显好于同覆盖下的 HiF4 / NVFP4（后两者是 4-bit 方案，比特预算不同，仅作对照）。
+
+---
+
+## 10. 局限
 
 - 全部是伪量化，没有用真实低比特 kernel 测精度和速度。GEMM 实际以 TF32 计算。
 - 每组实验只跑一次，只用 test-clean 评测，没有给出置信区间。
@@ -346,7 +364,7 @@ NVFP4 和论文的 INT4 同时在 4 个方面不同：元素格式（E2M1 对 IN
 
 ---
 
-## 10. 复现命令（容器内，工作目录 `/workspace/esc`）
+## 11. 复现命令（容器内，工作目录 `/workspace/esc`）
 
 ```bash
 # FP32
@@ -387,22 +405,28 @@ python inference.py --model conformer --quant_format hif4 --coverage gemm --cali
 python scripts/layer_mse_gemm.py
 
 # 单元测试
-python -m unittest tests.test_nvfp4 tests.test_nvfp4_model tests.test_hif4 -v
+python -m unittest tests.test_nvfp4 tests.test_nvfp4_model tests.test_hif4 tests.test_hif8 -v
+
+# HiF8 Cast（无 PTS）
+python inference.py --model conformer --quant_format hif8 --coverage all --calib max
+python inference.py --model conformer --quant_format hif8 --coverage gemm --calib max
+# 或: bash scripts/run_hif8_conformer.sh
 ```
 
 从宿主机运行时，在命令前加上 `wsl -d Ubuntu-26.04 -- docker exec -w /workspace/esc mpsenet`。
 
-日志位置：`logs/conformer_*.log`、`logs/conformer_b4/`、`logs/nvfp4/`、`logs/int4_block/`、`logs/hif4/`、`logs/controls/`、`logs/layer_mse_gemm.out`。
+日志位置：`logs/conformer_*.log`、`logs/conformer_b4/`、`logs/nvfp4/`、`logs/int4_block/`、`logs/hif4/`、`logs/hif8/`、`logs/controls/`、`logs/layer_mse_gemm.out`。
 
-## 11. 代码改动一览
+## 12. 代码改动一览
 
 | 文件 | 改动 |
 |---|---|
 | `models/mpsenet/mpnet.py`、`models/mpsenet/utils.py` | 数据和 checkpoint 路径；兼容官方 checkpoint 的 `generator` 键 |
 | `models/conformer/conformer.py` | LibriSpeech 路径改为 `/data/librispeech` |
-| `inference.py` | 新增 `--fp32_only`；修复 Max 校准报错；新增 `--quant_format {int,nvfp4,int4_block,hif4}`、`--coverage {all,gemm}`、`--weight_only`、`--act_dynamic_token`、`--act_dynamic_tensor`；HiF4 跳过静态校准 |
+| `inference.py` | 新增 `--fp32_only`；修复 Max 校准报错；新增 `--quant_format {int,nvfp4,int4_block,hif4,hif8}`、`--coverage {all,gemm}`、`--weight_only`、`--act_dynamic_token`、`--act_dynamic_tensor`；HiF4/HiF8 跳过静态校准 |
 | `utils/utils.py` | 日志文件命名；自动创建日志目录 |
-| `utils/quant_utils.py` | `set_block_quant`（含 `hif4`）、`set_gemm_only`、`set_dynamic_tensor_act`、`set_dynamic_token_act`、`set_weight_only`；`compute_amax` 跳过被关闭的量化器 |
-| `pytorch_quantization/tensor_quant.py` | `fake_block_quant` / `fake_nvfp4_quant`；`fake_hif4_quant`（Algorithm 1） |
-| `pytorch_quantization/nn/modules/tensor_quantizer.py` | `use_block_quant`、`use_hif4`、`use_dynamic_amax` |
-| `tests/test_nvfp4.py`、`tests/test_nvfp4_model.py`、`tests/test_hif4.py` | NVFP4 / HiF4 单元测试 |
+| `utils/quant_utils.py` | `set_block_quant`（含 `hif4`/`hif8`）、`set_gemm_only`、`set_dynamic_tensor_act`、`set_dynamic_token_act`、`set_weight_only`；`compute_amax` 跳过被关闭的量化器 |
+| `pytorch_quantization/tensor_quant.py` | `fake_block_quant` / `fake_nvfp4_quant`；`fake_hif4_quant`；`fake_hif8_quant`（HiF8 Cast TA） |
+| `pytorch_quantization/nn/modules/tensor_quantizer.py` | `use_block_quant`、`use_hif4`、`use_hif8`、`use_dynamic_amax` |
+| `tests/test_nvfp4.py`、`tests/test_nvfp4_model.py`、`tests/test_hif4.py`、`tests/test_hif8.py` | NVFP4 / HiF4 / HiF8 单元测试 |
+| `scripts/run_hif8_conformer.sh` | Conformer HiF8 Cast all+gemm 一键评测 |

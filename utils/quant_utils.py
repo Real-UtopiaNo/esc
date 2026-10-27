@@ -79,6 +79,7 @@ def set_block_quant(model, coverage="all", element="e2m1"):
     """Switch quantizers to block floating-point formats.
     element "e2m1"/"int4": NVFP4-style 16-element blocks with E4M3 scales (+ static global amax).
     element "hif4": HiFloat4 (arXiv:2602.11287) 64-element blocks with E6M2/E1/E1 scales (all dynamic).
+    element "hif8": HiFloat8 cast (arXiv:2409.16626) per-element TA, no PTS.
     coverage="gemm" leaves non-GEMM layers in full precision."""
     for name, module in model.model.named_modules():
         if not hasattr(module, "input_quantizer"):
@@ -97,6 +98,10 @@ def set_block_quant(model, coverage="all", element="e2m1"):
             module.input_quantizer.use_hif4(in_axis)
             if hasattr(module, "_weight_quantizer"):
                 module.weight_quantizer.use_hif4(w_axis)
+        elif element == "hif8":
+            module.input_quantizer.use_hif8()
+            if hasattr(module, "_weight_quantizer"):
+                module.weight_quantizer.use_hif8()
         else:
             module.input_quantizer.use_block_quant(in_axis, element)
             if hasattr(module, "_weight_quantizer"):

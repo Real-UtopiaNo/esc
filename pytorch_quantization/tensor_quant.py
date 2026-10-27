@@ -613,3 +613,160 @@ def fake_hif4_quant(inputs, block_axis=-1, block_size=HIF4_BLOCK):
     out = torch.where(zero, torch.zeros_like(out), out)
     out = out.reshape(x.shape)[..., :length]
     return out.to(inputs.dtype)
+
+
+# ---- HiFloat8 / HiF8 (arXiv:2409.16626) element cast, no PTS ----
+# Memory layout: 1 sign + variable Dot/Exp/Mantissa (tapered). Specials: +0==−0,
+# NaN=0b10000000, ±Inf = S1101111. Forward cast uses round-half-away-from-zero (TA).
+
+_HIF8_POS_VALS = None  # sorted unique positive finite values (CPU tensor)
+_HIF8_POS_CODES = None  # matching unsigned codes in 0..127 (sign bit clear)
+
+
+def _hif8_decode_byte(code):
+    """Decode one HiF8 code (0..255) to a Python float (nan/inf allowed)."""
+    code = int(code) & 0xFF
+    if code == 0x00:
+        return 0.0
+    if code == 0x80:
+        return float("nan")
+    sign = -1.0 if (code & 0x80) else 1.0
+    bits = code & 0x7F  # 7-bit payload after sign
+
+    if bits == 0x6F:  # S1101111 payload 1101111 → ±Inf
+        return sign * float("inf")
+
+    # Dot-field prefix on the 7-bit payload (MSB-first within these 7 bits)
+    if bits >= 0b1100000:  # 11xxxxx  D=4, Em=4, M=1
+        em = (bits >> 1) & 0b1111
+        m_bits = bits & 0b1
+        m_width = 1
+        d = 4
+    elif bits >= 0b1000000:  # 10xxxxx  D=3, Em=3, M=2
+        em = (bits >> 2) & 0b111
+        m_bits = bits & 0b11
+        m_width = 2
+        d = 3
+    elif bits >= 0b0100000:  # 01xxxxx  D=2, Em=2, M=3
+        em = (bits >> 3) & 0b11
+        m_bits = bits & 0b111
+        m_width = 3
+        d = 2
+    elif bits >= 0b0010000:  # 001xxxx  D=1, Em=1, M=3
+        em = (bits >> 3) & 0b1
+        m_bits = bits & 0b111
+        m_width = 3
+        d = 1
+    elif bits >= 0b0001000:  # 0001xxx  D=0, Em=none, M=3
+        m_bits = bits & 0b111
+        # Normal with E=0
+        frac = m_bits / float(2 ** 3)
+        return sign * (1.0 + frac)  # 2^0 * 1.M
+    else:  # 0000xxx  DML, M in [0,7]; M=0 already handled as 0/NaN
+        m_bits = bits & 0b111
+        if m_bits == 0:
+            return 0.0
+        return sign * (2.0 ** (m_bits - 23))
+
+    # Normal with D>=1: Em = {Se, Mag[2:end]}, Ei magnitude has implicit leading 1
+    se = (em >> (d - 1)) & 1
+    mag_rest = em & ((1 << (d - 1)) - 1)
+    e_mag = (1 << (d - 1)) + mag_rest
+    e = -e_mag if se else e_mag
+    frac = m_bits / float(2 ** m_width)
+    # E=+15 and 1.5 → Inf (largest magnitude NML encodings)
+    if e == 15 and frac == 0.5:
+        return sign * float("inf")
+    return sign * (2.0 ** e) * (1.0 + frac)
+
+
+def _hif8_build_luts():
+    """Positive finite HiF8 values and codes for TA cast (excludes 0/Inf/NaN)."""
+    global _HIF8_POS_VALS, _HIF8_POS_CODES
+    if _HIF8_POS_VALS is not None:
+        return
+    pairs = []
+    for code in range(0x01, 0x80):  # skip +0; sign bit clear
+        v = _hif8_decode_byte(code)
+        if v != v or v == float("inf") or v <= 0:
+            continue
+        pairs.append((v, code))
+    pairs.sort(key=lambda p: (p[0], p[1]))
+    vals, codes = [], []
+    for v, c in pairs:
+        if vals and v == vals[-1]:
+            continue
+        vals.append(v)
+        codes.append(c)
+    _HIF8_POS_VALS = torch.tensor(vals, dtype=torch.float32)
+    _HIF8_POS_CODES = torch.tensor(codes, dtype=torch.uint8)
+
+
+def hif8_decode(codes):
+    """Decode a uint8 tensor of HiF8 codes to float32."""
+    flat = codes.detach().reshape(-1).cpu().tolist()
+    out = torch.tensor([_hif8_decode_byte(c) for c in flat], dtype=torch.float32)
+    return out.reshape(codes.shape).to(codes.device)
+
+
+def hif8_encode(inputs):
+    """Cast float tensor to HiF8 codes with round-half-away-from-zero (TA)."""
+    _hif8_build_luts()
+    x = inputs.float()
+    device = x.device
+    pos_vals = _HIF8_POS_VALS.to(device)
+    pos_codes = _HIF8_POS_CODES.to(device)
+
+    mag = x.abs()
+    sign_bit = (x < 0) & (mag != 0)  # −0 collapses to +0
+
+    nan_mask = torch.isnan(x)
+    inf_mask = torch.isinf(x) | (mag > pos_vals[-1])
+    zero_mask = (mag == 0) & ~nan_mask
+
+    # searchsorted: index of first pos_vals[i] >= mag
+    idx = torch.searchsorted(pos_vals, mag.reshape(-1).contiguous()).clamp(max=pos_vals.numel() - 1)
+    idx = idx.reshape(mag.shape)
+    right = pos_vals[idx]
+    left_idx = (idx - 1).clamp(min=0)
+    left = pos_vals[left_idx]
+
+    # Midpoint; ties (mag == mid) go to the larger magnitude (away from 0)
+    mid = 0.5 * (left + right)
+    use_right = mag >= mid
+    # Below the smallest positive finite → round toward 0 or up to min finite
+    below = mag < pos_vals[0]
+    # halfway between 0 and min finite: TA away from 0 → min finite
+    mid0 = 0.5 * pos_vals[0]
+    choose_min = below & (mag >= mid0)
+    choose_zero = below & (mag < mid0)
+
+    chosen_idx = torch.where(use_right, idx, left_idx)
+    codes = pos_codes[chosen_idx]
+    codes = torch.where(choose_min, pos_codes[0].expand_as(codes), codes)
+    # ±Inf before sign
+    codes = torch.where(inf_mask, torch.full_like(codes, 0x6F), codes)
+    # Sign bit on nonzero codes only. Flush-to-zero (and true zero) must stay 0x00:
+    # the paper uses a single zero pattern; 0x80 is NaN, not −0.
+    codes = torch.where(sign_bit & ~nan_mask, codes | torch.tensor(0x80, dtype=codes.dtype, device=device), codes)
+    codes = torch.where(choose_zero | zero_mask, torch.zeros_like(codes), codes)
+    # NaN is always 0x80
+    codes = torch.where(nan_mask, torch.full_like(codes, 0x80), codes)
+    return codes
+
+
+def fake_hif8_quant(inputs):
+    """HiF8 fake quantization (arXiv:2409.16626): per-element cast with TA rounding, no PTS.
+
+    Quantize each value onto the HiF8 grid and dequantize back to the input dtype.
+    """
+    codes = hif8_encode(inputs)
+    # Vectorized decode via LUT of all 256 codes
+    lut = getattr(fake_hif8_quant, "_lut", None)
+    if lut is None or lut.device != inputs.device:
+        lut = torch.tensor([_hif8_decode_byte(i) for i in range(256)],
+                           dtype=torch.float32, device=inputs.device)
+        fake_hif8_quant._lut = lut
+    out = lut[codes.long()]
+    # Preserve NaN bit-pattern behavior in float
+    return out.to(inputs.dtype)

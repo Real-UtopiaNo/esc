@@ -55,9 +55,10 @@ def get_args():
         "--quant_format",
         type=str,
         default="int",
-        choices=["int", "nvfp4", "int4_block", "hif4"],
+        choices=["int", "nvfp4", "int4_block", "hif4", "hif8"],
         help="int: uniform integer quantization of --num_bits; nvfp4: E2M1 + E4M3/16 + FP32 global; "
-             "int4_block: nvfp4 scales with INT4 elements; hif4: HiFloat4 (S1P2 + E6M2/E1/E1, block 64)",
+             "int4_block: nvfp4 scales with INT4 elements; hif4: HiFloat4 (S1P2 + E6M2/E1/E1, block 64); "
+             "hif8: HiFloat8 per-element cast TA (arXiv:2409.16626), no PTS",
     )
     parser.add_argument(
         "--coverage",
@@ -264,7 +265,7 @@ if __name__ == "__main__":
     model_ptq.load()
     set_bits(model_ptq, num_bits)
     if args.quant_format != "int":
-        element = {"nvfp4": "e2m1", "int4_block": "int4", "hif4": "hif4"}[args.quant_format]
+        element = {"nvfp4": "e2m1", "int4_block": "int4", "hif4": "hif4", "hif8": "hif8"}[args.quant_format]
         set_block_quant(model_ptq, args.coverage, element)
     elif args.coverage == "gemm":
         set_gemm_only(model_ptq)
@@ -278,9 +279,9 @@ if __name__ == "__main__":
     model_ptq.pre_calibration(ptq)
 
     logger.info('Calibration start')
-    if args.quant_format == "hif4":
-        # HiF4 scales are fully dynamic (E6M2/E1/E1 from each tensor); no static amax.
-        logger.info('HiF4: skipping static calibration')
+    if args.quant_format in ("hif4", "hif8"):
+        # HiF4: dynamic block scales. HiF8 Cast: per-element TA, no PTS / no amax.
+        logger.info('%s: skipping static calibration', args.quant_format)
     elif args.precompute_scale is None:
         # HistogramCalibrator has no "max" method; keep the default MaxCalibrator for it
         if args.calib != "max":
