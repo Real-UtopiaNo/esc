@@ -57,5 +57,45 @@ class GptqHif4Test(unittest.TestCase):
         self.assertLessEqual(err_gptq, err_cast * 1.05)
 
 
+class HiGPTQRunTest(unittest.TestCase):
+    """End-to-end run on CPU with a user-supplied calib_fn (no model wrapper)."""
+
+    def test_run_with_calib_fn_on_cpu(self):
+        from pytorch_quantization import nn as quant_nn
+        from ptq.higptq_ptq import HiGPTQPTQ
+
+        torch.manual_seed(0)
+
+        class Net(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc1 = quant_nn.QuantLinear(96, 64)
+                self.fc2 = quant_nn.QuantLinear(64, 32)
+                self.unused = quant_nn.QuantLinear(32, 16)
+
+            def forward(self, x):
+                return self.fc2(torch.relu(self.fc1(x)))
+
+        net = Net()
+        for m in net.modules():
+            if isinstance(m, quant_nn.QuantLinear):
+                m.input_quantizer.use_hif4(-1)
+                m.weight_quantizer.use_hif4(-1)
+        w_before = net.fc1.weight.detach().clone()
+        calib = [torch.randn(2, 10, 96) for _ in range(4)]
+
+        def calib_fn():
+            for x in calib:
+                net(x)
+
+        HiGPTQPTQ(net, calib_fn=calib_fn, device="cpu").run()
+
+        self.assertFalse(torch.equal(net.fc1.weight, w_before))
+        self.assertTrue(net.fc1.weight_quantizer._disabled)
+        self.assertTrue(net.fc2.weight_quantizer._disabled)
+        # Never reached by calib_fn → falls back to HiF4 cast
+        self.assertFalse(net.unused.weight_quantizer._disabled)
+
+
 if __name__ == "__main__":
     unittest.main()

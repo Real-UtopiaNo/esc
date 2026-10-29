@@ -151,24 +151,27 @@ def _update_hessian(H: torch.Tensor, n_samples: int, inp: torch.Tensor):
 
 
 class HiGPTQPTQ(PTQBase):
-    """Sequential HiGPTQ over QuantLinear layers."""
+    """Sequential HiGPTQ over QuantLinear layers.
+
+    calib_fn: zero-argument callable that runs ``model`` forward over the whole
+    calibration set once, with the same preprocessing as inference. It is called
+    once per QuantLinear, so it must not cache outputs.
+    """
 
     def __init__(
         self,
         model,
-        model_ptq=None,
-        num_batches: int = 100,
+        calib_fn,
         blocksize: int = 128,
         percdamp: float = 0.01,
         device: str = "cuda",
         **kwargs,
     ):
         self.model = model
-        self.model_ptq = model_ptq
-        self.num_batches = num_batches
+        self.calib_fn = calib_fn
         self.blocksize = blocksize
         self.percdamp = percdamp
-        self.device = device if torch.cuda.is_available() else "cpu"
+        self.device = device if device == "cpu" or torch.cuda.is_available() else "cpu"
 
     def _iter_quant_linears(self):
         for name, module in self.model.named_modules():
@@ -182,22 +185,8 @@ class HiGPTQPTQ(PTQBase):
                     continue
                 yield name, module
 
-    def _calib_forward(self):
-        """One pass over the calibration subset (Conformer featurizer path)."""
-        if self.model_ptq is None:
-            raise RuntimeError("HiGPTQ needs model_ptq to run calibration forwards")
-        from models.conformer.utils import load_featurizer  # local import: ASR-specific
-
-        self.model.eval()
-        iterable = enumerate(self.model_ptq.train_dataset)
-        for i, (waveform, *_rest) in iterable:
-            if i >= self.num_batches:
-                break
-            waveform = load_featurizer()(waveform)
-            waveform = waveform.to(self.device).permute(0, 2, 1)
-            self.model(waveform)
-
-    def _accumulate_hessian(self, module: quant_nn.QuantLinear) -> torch.Tensor:
+    def _accumulate_hessian(self, module: quant_nn.QuantLinear):
+        """Returns the Hessian, or None if the layer saw no calibration input."""
         columns = module.in_features
         H = torch.zeros(columns, columns, device=self.device, dtype=torch.float32)
         n_samples = 0
@@ -212,12 +201,12 @@ class HiGPTQPTQ(PTQBase):
         handle = module.register_forward_pre_hook(pre_hook)
         try:
             with torch.no_grad():
-                self._calib_forward()
+                self.calib_fn()
         finally:
             handle.remove()
 
         if state["n"] == 0:
-            raise RuntimeError("HiGPTQ collected 0 Hessian samples")
+            return None
         return state["H"]
 
     def run(self):
@@ -225,8 +214,7 @@ class HiGPTQPTQ(PTQBase):
         self.model.eval()
 
         layers = list(self._iter_quant_linears())
-        logger.info("HiGPTQ: %d QuantLinear layers, sequential, %d calib batches",
-                    len(layers), self.num_batches)
+        logger.info("HiGPTQ: %d QuantLinear layers, sequential", len(layers))
 
         # Unprocessed Linears use FP weights (GPTQ input); keep act HiF4 on.
         for _, module in layers:
@@ -238,6 +226,10 @@ class HiGPTQPTQ(PTQBase):
                         module.out_features, module.in_features)
 
             H = self._accumulate_hessian(module)
+            if H is None:
+                logger.warning("HiGPTQ: %s got no calibration input, keeping HiF4 cast", name)
+                module.weight_quantizer.enable()
+                continue
             q_weight = gptq_hif4(
                 module.weight.data,
                 H,
