@@ -567,6 +567,41 @@ def _round_to_s1p2(x):
     return torch.sign(x) * q
 
 
+def hif4_compute_scales(blocks):
+    """Compute HiF4 hierarchical scales for blocks shaped (..., B, 64).
+
+    Returns (e6m2, e1_8, e1_16, zero) with shapes
+    (..., B, 1), (..., B, 8), (..., B, 16), (..., B, 1).
+    """
+    abs_b = blocks.abs()
+    v16 = abs_b.reshape(*abs_b.shape[:-1], 16, 4).amax(dim=-1)
+    v8 = v16.reshape(*v16.shape[:-1], 8, 2).amax(dim=-1)
+    vmax = v8.amax(dim=-1, keepdim=True)
+    zero = vmax == 0
+
+    sf = (vmax / HIF4_INTRAGROUP_MAX).clamp(min=E6M2_QMIN)
+    e6m2 = _to_e6m2(sf)
+    rec = torch.where(zero, torch.ones_like(e6m2), 1.0 / e6m2)
+
+    e1_8 = (v8 * rec >= 4).to(blocks.dtype)
+    e1_8_for16 = e1_8.repeat_interleave(2, dim=-1)
+    two = torch.tensor(2.0, device=blocks.device, dtype=blocks.dtype)
+    e1_16 = (v16 * rec * torch.pow(two, -e1_8_for16) >= 2).to(blocks.dtype)
+    return e6m2, e1_8, e1_16, zero
+
+
+def hif4_apply_scales(blocks, e6m2, e1_8, e1_16, zero):
+    """Apply frozen HiF4 scales to blocks shaped (..., B, 64)."""
+    rec = torch.where(zero, torch.ones_like(e6m2), 1.0 / e6m2)
+    e1_8_el = e1_8.repeat_interleave(8, dim=-1)
+    e1_16_el = e1_16.repeat_interleave(4, dim=-1)
+    two = torch.tensor(2.0, device=blocks.device, dtype=blocks.dtype)
+    scaled = blocks * rec * torch.pow(two, -e1_8_el) * torch.pow(two, -e1_16_el)
+    s1p2 = _round_to_s1p2(scaled)
+    out = e6m2 * torch.pow(two, e1_8_el + e1_16_el) * s1p2
+    return torch.where(zero, torch.zeros_like(out), out)
+
+
 def fake_hif4_quant(inputs, block_axis=-1, block_size=HIF4_BLOCK):
     """HiF4 fake quantization (arXiv:2602.11287): 64-element blocks with E6M2 / E1_8 / E1_16
     hierarchical scales and S1P2 elements. All scales are computed from the tensor itself
@@ -589,28 +624,8 @@ def fake_hif4_quant(inputs, block_axis=-1, block_size=HIF4_BLOCK):
         x = torch.nn.functional.pad(x, (0, pad))
 
     blocks = x.reshape(*x.shape[:-1], -1, block_size)  # (..., B, 64)
-    abs_b = blocks.abs()
-    v16 = abs_b.reshape(*abs_b.shape[:-1], 16, 4).amax(dim=-1)       # (..., B, 16)
-    v8 = v16.reshape(*v16.shape[:-1], 8, 2).amax(dim=-1)             # (..., B, 8)
-    vmax = v8.amax(dim=-1, keepdim=True)                              # (..., B, 1)
-    zero = vmax == 0
-
-    sf = (vmax / HIF4_INTRAGROUP_MAX).clamp(min=E6M2_QMIN)
-    e6m2 = _to_e6m2(sf)
-    rec = torch.where(zero, torch.ones_like(e6m2), 1.0 / e6m2)
-
-    e1_8 = (v8 * rec >= 4).to(x.dtype)                                # (..., B, 8)
-    e1_8_for16 = e1_8.repeat_interleave(2, dim=-1)                    # (..., B, 16)
-    e1_16 = (v16 * rec * torch.pow(torch.tensor(2.0, device=x.device, dtype=x.dtype),
-                                   -e1_8_for16) >= 2).to(x.dtype)
-
-    e1_8_el = e1_8.repeat_interleave(8, dim=-1)                       # (..., B, 64)
-    e1_16_el = e1_16.repeat_interleave(4, dim=-1)
-    two = torch.tensor(2.0, device=x.device, dtype=x.dtype)
-    scaled = blocks * rec * torch.pow(two, -e1_8_el) * torch.pow(two, -e1_16_el)
-    s1p2 = _round_to_s1p2(scaled)
-    out = e6m2 * torch.pow(two, e1_8_el + e1_16_el) * s1p2
-    out = torch.where(zero, torch.zeros_like(out), out)
+    e6m2, e1_8, e1_16, zero = hif4_compute_scales(blocks)
+    out = hif4_apply_scales(blocks, e6m2, e1_8, e1_16, zero)
     out = out.reshape(x.shape)[..., :length]
     return out.to(inputs.dtype)
 
