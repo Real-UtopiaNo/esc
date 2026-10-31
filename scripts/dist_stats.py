@@ -137,6 +137,99 @@ def collect_linear_stats(model, run_fn, out_dir="dist_stats", plot_top=6):
     return rows
 
 
+def _kurtosis_rows(x):
+    """Pearson kurtosis (Gaussian = 3) of each row of a 2-D tensor; NaN for constant rows."""
+    c = x - x.mean(dim=1, keepdim=True)
+    m2 = (c ** 2).mean(dim=1)
+    m4 = (c ** 4).mean(dim=1)
+    return torch.where(m2 > 0, m4 / m2 ** 2, torch.full_like(m2, math.nan))
+
+
+def count_kurtosis_exceed(model, run_fn, threshold=10.0, per_frame=False,
+                          frame_dims=None, out_dir="dist_stats"):
+    """For every nn.Linear, compute the kurtosis of its input activation per unit and count
+    how many units exceed ``threshold``.
+
+    per_frame=False: one unit = one call of the layer (one model forward for streaming models
+                     that consume a single frame per forward).
+    per_frame=True:  one unit = one frame inside each call. ``frame_dims`` are the dims that
+                     make up one frame of the Linear input; default (-1,) = one row of
+                     features, e.g. [B, T, C] -> one value per (b, t).
+
+    Writes kurtosis_count.csv (one row per layer) and kurtosis_count.png.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    linears = [(n, m) for n, m in model.named_modules() if isinstance(m, nn.Linear)]
+    frame_dims = tuple(frame_dims) if frame_dims is not None else (-1,)
+    values = {n: [] for n, _ in linears}
+
+    def hook(mod, inp, n):
+        x = inp[0].detach().double()
+        if per_frame:
+            dims = [d % x.dim() for d in frame_dims]
+            keep = [d for d in range(x.dim()) if d not in dims]
+            x = x.permute(*keep, *dims).reshape(-1, math.prod(x.shape[d] for d in dims))
+        else:
+            x = x.reshape(1, -1)
+        values[n].append(_kurtosis_rows(x).cpu())
+
+    hooks = [m.register_forward_pre_hook(lambda mod, inp, n=n: hook(mod, inp, n))
+             for n, m in linears]
+    model.eval()
+    try:
+        with torch.no_grad():
+            run_fn()
+    finally:
+        for h in hooks:
+            h.remove()
+
+    rows = []
+    for n, _ in linears:
+        if not values[n]:
+            continue
+        k = torch.cat(values[n])
+        k = k[~torch.isnan(k)]
+        if k.numel() == 0:
+            continue
+        exceed = int((k > threshold).sum())
+        rows.append({
+            "layer": n,
+            "units": k.numel(),
+            f"kurt>{threshold:g}": exceed,
+            "ratio": exceed / k.numel(),
+            "kurt_median": k.median().item(),
+            "kurt_mean": k.mean().item(),
+            "kurt_max": k.max().item(),
+        })
+
+    with open(os.path.join(out_dir, "kurtosis_count.csv"), "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: (f"{v:.4g}" if isinstance(v, float) else v) for k, v in r.items()})
+
+    unit = "frames" if per_frame else "calls"
+    print(f"\n{'layer':<55} {unit:>8} {f'kurt>{threshold:g}':>9} {'ratio':>7} {'median':>8} {'max':>8}")
+    for r in sorted(rows, key=lambda r: r["ratio"], reverse=True):
+        print(f"{r['layer']:<55} {r['units']:>8} {r[f'kurt>{threshold:g}']:>9} {r['ratio']:>7.1%} "
+              f"{r['kurt_median']:>8.1f} {r['kurt_max']:>8.1f}")
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(max(8, len(rows) * 0.12), 4))
+        ax.bar(range(len(rows)), [r["ratio"] for r in rows])
+        ax.set_xlabel("Linear layer index (forward order of named_modules)")
+        ax.set_ylabel(f"fraction of {unit} with kurtosis > {threshold:g}")
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_dir, "kurtosis_count.png"), dpi=120)
+        plt.close(fig)
+    except ImportError:
+        pass
+    return rows
+
+
 def _plot(per_layer, top, out_dir):
     try:
         import matplotlib
@@ -183,3 +276,7 @@ if __name__ == "__main__":
     model_ptq.model.cuda().eval()
     collect_linear_stats(model_ptq.model, lambda: model_ptq.calib_forward(10),
                          out_dir="assets/dist_stats_conformer")
+    count_kurtosis_exceed(model_ptq.model, lambda: model_ptq.calib_forward(10),
+                          per_frame=False, out_dir="assets/dist_stats_conformer/per_call")
+    count_kurtosis_exceed(model_ptq.model, lambda: model_ptq.calib_forward(10),
+                          per_frame=True, out_dir="assets/dist_stats_conformer/per_frame")
